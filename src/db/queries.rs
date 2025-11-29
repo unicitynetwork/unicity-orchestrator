@@ -89,6 +89,26 @@ impl QueryBuilder {
         let created: Option<ToolRecord> = res.take(0)?;
         created.ok_or_else(|| anyhow!("failed to create tool record"))
     }
+
+    pub async fn find_tool_by_id(
+        db: &Surreal<Any>,
+        tool_id: RecordId,
+    ) -> Result<Option<ToolRecord>> {
+        let mut res = db
+            .query(
+                r#"
+                SELECT * FROM tool
+                WHERE id = $id
+                LIMIT 1
+                "#,
+            )
+            .bind(("id", tool_id))
+            .await?;
+
+        let tool: Option<ToolRecord> = res.take(0)?;
+        Ok(tool)
+    }
+
     /// Find tools whose embeddings are similar to the given query vector.
     ///
     /// This implementation performs a vector search over the `embedding` table

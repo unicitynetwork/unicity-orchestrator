@@ -1,5 +1,6 @@
 // MCP client implementation backed by rmcp
 
+use std::borrow::Cow;
 use crate::config::McpServiceConfig;
 use anyhow::Result;
 use rmcp::{
@@ -8,6 +9,7 @@ use rmcp::{
     ServiceExt,
     transport::{TokioChildProcess, ConfigureCommandExt},
 };
+use rmcp::model::{CallToolRequestParam, Content, JsonObject};
 use surrealdb::RecordId;
 use tokio::process::Command;
 use tracing::{info, warn};
@@ -72,4 +74,18 @@ pub async fn inspect_service(
     }
 
     Ok((server_info, tools))
+}
+
+pub async fn call_tool(
+    running: &RunningService,
+    tool_name: &str,
+    args: JsonObject,
+) -> Result<Vec<Content>> {
+    let request = CallToolRequestParam {
+        name: Cow::from(tool_name.to_string()),
+        arguments: Some(args),
+    };
+
+    let resp = running.client.call_tool(request).await?;
+    Ok(resp.content)
 }

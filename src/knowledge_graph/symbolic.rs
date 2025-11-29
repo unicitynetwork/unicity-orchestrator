@@ -179,19 +179,20 @@ impl SymbolicReasoner {
         Ok(())
     }
 
-    /// Add a new symbolic rule to the in-memory rule set.
-    ///
-    /// NOTE: This currently only logs and appends to the in-memory list.
-    /// Persisting symbolic rules back into SurrealDB is left as a TODO.
-    pub async fn add_rule(&mut self, rule: SymbolicRule) -> Result<()> {
-        let rule_id = rule.id.clone();
-
-        // Store in database (placeholder)
-        tracing::info!("Adding rule: {}", rule_id);
-
-        self.rules.push(rule);
-        Ok(())
-    }
+    // TODO
+    // /// Add a new symbolic rule to the in-memory rule set.
+    // ///
+    // /// NOTE: This currently only logs and appends to the in-memory list.
+    // /// Persisting symbolic rules back into SurrealDB is left as a TODO.
+    // pub async fn add_rule(&mut self, rule: SymbolicRule) -> Result<()> {
+    //     let rule_id = rule.id.clone();
+    //
+    //     // Store in database (placeholder)
+    //     tracing::info!("Adding rule: {}", rule_id);
+    //
+    //     self.rules.push(rule);
+    //     Ok(())
+    // }
 
     /// Use the symbolic engine to propose a set of tools for a natural language query.
     ///
@@ -265,6 +266,8 @@ impl SymbolicReasoner {
                         {
                             selections.push(ToolSelection {
                                 tool_id: tool_rec.id.clone(),
+                                tool_name: tool_rec.name.clone(),
+                                service_id: tool_rec.service_id.clone(),
                                 confidence: *confidence as f32,
                                 reasoning: reasoning.clone(),
                                 dependencies: vec![],
@@ -297,7 +300,7 @@ impl SymbolicReasoner {
             goal: goal.to_string(),
             available_tools: available_tools.to_vec(),
             constraints: constraints.clone(),
-            working_memory: self.working_memory.clone(),
+            // working_memory: self.working_memory.clone(),
         };
 
         // Use backward chaining to find plan
@@ -306,17 +309,31 @@ impl SymbolicReasoner {
         Ok(plan)
     }
 
-    pub fn add_fact(&mut self, predicate: &str, arguments: Vec<SymbolicExpression>, confidence: f32) {
-        let fact = Fact {
-            predicate: predicate.to_string(),
-            arguments,
-            confidence: Some(confidence),
-        };
-        self.working_memory
-            .facts
-            .entry(predicate.to_string())
-            .or_default()
-            .push(fact);
+    /// Plan a sequence of tools for a natural-language goal using the existing
+    /// backward-chaining planner and a set of default planning constraints.
+    ///
+    /// This is a convenience wrapper around `plan_tool_sequence` that:
+    /// - uses the goal string directly as the planning goal
+    /// - applies `PlanningConstraints::default()` unless explicit constraints
+    ///   are provided
+    /// - returns `Ok(None)` if no concrete steps could be constructed
+    pub async fn plan_tools_for_goal(
+        &mut self,
+        goal: &str,
+        available_tools: &[crate::db::schema::ToolRecord],
+        constraints: Option<PlanningConstraints>,
+    ) -> Result<Option<ToolPlan>> {
+        let constraints = constraints.unwrap_or_else(PlanningConstraints::default);
+
+        let plan = self
+            .plan_tool_sequence(goal, available_tools, &constraints)
+            .await?;
+
+        if plan.steps.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(plan))
+        }
     }
 
     fn add_fact_to_memory(&mut self, predicate: &str, arguments: Vec<SymbolicExpression>, confidence: f32) -> Result<()> {
@@ -427,39 +444,30 @@ impl SymbolicReasoner {
             query.to_string(),
         )))
     }
-
-    fn extract_entities(&self, query: &str) -> Vec<String> {
-        // Simple entity extraction - in a real implementation, use NER.
-        // We normalize the query to lowercase once to avoid repeated allocations.
-        let mut entities = Vec::new();
-        let query_lc = query.to_lowercase();
-
-        // Common entities in MCP context.
-        let entity_patterns = [
-            "file", "directory", "database", "api", "service", "tool",
-            "json", "yaml", "csv", "pdf", "image", "video", "audio",
-            "github", "gitlab", "slack", "email", "calendar", "task",
-        ];
-
-        for pattern in entity_patterns {
-            if query_lc.contains(pattern) {
-                entities.push(pattern.to_string());
-            }
-        }
-
-        entities
-    }
 }
 
 /// Hard constraints and preferences for planning a tool sequence.
 #[derive(Debug, Clone)]
 pub struct PlanningConstraints {
     pub max_steps: u32,
-    pub timeout_seconds: u32,
+    pub timeout_seconds: u32, // TODO
     pub allowed_tools: Option<Vec<String>>,
     pub forbidden_tools: Option<Vec<String>>,
     pub max_cost: Option<f32>,
     pub requirements: Vec<String>,
+}
+
+impl Default for PlanningConstraints {
+    fn default() -> Self {
+        Self {
+            max_steps: 8,
+            timeout_seconds: 30,
+            allowed_tools: None,
+            forbidden_tools: None,
+            max_cost: None,
+            requirements: Vec::new(),
+        }
+    }
 }
 
 /// A planning problem instance presented to the rule engine.
@@ -468,7 +476,7 @@ pub struct PlanningProblem {
     pub goal: String,
     pub available_tools: Vec<crate::db::schema::ToolRecord>,
     pub constraints: PlanningConstraints,
-    pub working_memory: WorkingMemory,
+    // pub working_memory: WorkingMemory, // TODO
 }
 
 /// A single tool candidate proposed by the symbolic engine for a given query.
@@ -478,6 +486,8 @@ pub struct PlanningProblem {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolSelection {
     pub tool_id: RecordId,
+    pub tool_name: String,
+    pub service_id: RecordId,
     pub confidence: f32,
     pub reasoning: String,
     pub dependencies: Vec<String>,

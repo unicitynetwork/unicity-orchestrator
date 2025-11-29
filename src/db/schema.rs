@@ -123,7 +123,7 @@ pub struct TypedSchema {
     /// List of required property names for object types.
     pub required: Option<Vec<String>>,
     /// Optional enum value set for constrained types.
-    pub enum_values: Option<Vec<serde_json::Value>>,
+    pub enum_values: Option<Vec<Value>>,
 }
 
 impl TypedSchema {

@@ -40,9 +40,9 @@ impl Default for EmbeddingConfig {
             // embeddings instead, set `model_architecture = "qwen"` and
             // provide the appropriate Qwen embedding model id via
             // configuration.
-            model_name: "all-MiniLM-L6-v2".to_string(),
-            model_architecture: "jina".to_string(),
-            dimension: 384,
+            model_name: "Qwen/QWen3-Embedding-0.6B".to_string(),
+            model_architecture: "Qwen3".to_string(),
+            dimension: 1024,
             batch_size: 32,
         }
     }
@@ -54,8 +54,8 @@ impl EmbeddingManager {
         // infer from the model name ("qwen" -> "qwen", else default to "jina").
         let arch = if !config.model_architecture.is_empty() {
             config.model_architecture.clone()
-        } else if config.model_name.to_lowercase().contains("qwen") {
-            "qwen".to_string()
+        } else if config.model_name.to_lowercase().contains("qwen3") {
+            "qwen3".to_string()
         } else {
             "jina".to_string()
         };
@@ -378,7 +378,7 @@ impl EmbeddingManager {
             limit,
             threshold,
         )
-        .await?;
+            .await?;
 
         let mut results = Vec::new();
 

@@ -260,6 +260,7 @@ let github_registry = RegistryConfig {
 ## Development
 
 ### Project Structure
+
 TODO
 
 ### Adding New Registry Providers

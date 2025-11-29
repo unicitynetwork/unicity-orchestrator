@@ -4,37 +4,74 @@ pub mod mcp_client;
 
 // Core modules
 pub mod db;
-pub mod knowledge_graph;
+mod knowledge_graph;
 pub mod mcp;
 pub mod core;
 pub mod api;
 pub mod utils;
+mod executor;
 
 // Re-export key types and functions
 pub use db::{DatabaseConfig, create_connection, ensure_schema, ToolRecord};
 pub use knowledge_graph::{KnowledgeGraph, EmbeddingManager};
 pub use mcp::registry::{McpRegistryManager, RegistryConfig};
 pub use config::{load_mcp_services, McpServiceConfig};
-
 use anyhow::Result;
-use serde_json;
-
 use crate::db::queries::QueryBuilder;
 use crate::db::schema::{ServiceCreate, CreateToolRecord, ServiceOrigin as DbServiceOrigin, TypedSchema};
 use serde_json::Value;
-
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use rmcp::{
     ServerHandler,
-    model::{ServerInfo, ServerCapabilities, ProtocolVersion, Implementation},
+    model::{
+        ServerInfo,
+        ServerCapabilities,
+        ProtocolVersion,
+        Implementation,
+        Tool as McpTool,
+        JsonObject,
+        ListToolsResult,
+        Content,
+        PaginatedRequestParam,
+    },
+    RoleServer,
 };
+use rmcp::model::{CallToolRequestMethod, CallToolRequestParam, CallToolResult};
+use rmcp::service::RequestContext;
 use crate::knowledge_graph::{SymbolicReasoner, ToolSelection};
+use crate::mcp_client::RunningService;
 
 pub struct UnicityOrchestrator {
     db: surrealdb::Surreal<surrealdb::engine::any::Any>,
     knowledge_graph: KnowledgeGraph,
-    embedding_manager: EmbeddingManager,
-    symbolic_reasoner: SymbolicReasoner,
+    /// Embedding manager is wrapped in a Mutex so we can safely call async
+    /// methods that require mutable access (e.g. updating embeddings) from
+    /// methods that only have `&self` (such as MCP handlers).
+    embedding_manager: Mutex<EmbeddingManager>,
+    /// Symbolic reasoner is also wrapped in a Mutex to allow interior
+    /// mutability for rule loading and inference without requiring `&mut self`
+    /// on the orchestrator.
+    symbolic_reasoner: Mutex<SymbolicReasoner>,
     registry_manager: McpRegistryManager,
+    running_services: HashMap<surrealdb::RecordId, Arc<RunningService>>,
+}
+
+/// A single step in a proposed multi-tool plan.
+pub struct PlanStep {
+    pub description: String,
+    pub service_id: surrealdb::RecordId,
+    pub tool_name: String,
+    pub inputs: Vec<String>,
+}
+
+/// Result of planning: a sequence of steps plus overall confidence and reasoning.
+pub struct PlanResult {
+    pub steps: Vec<PlanStep>,
+    pub confidence: f32,
+    pub reasoning: String,
 }
 
 impl UnicityOrchestrator {
@@ -45,19 +82,20 @@ impl UnicityOrchestrator {
 
         // Initialize components
         let knowledge_graph = KnowledgeGraph::new();
-        let embedding_manager = EmbeddingManager::new(
+        let embedding_manager_inner = EmbeddingManager::new(
             db.clone(),
             knowledge_graph::embedding::EmbeddingConfig::default(),
         ).await?;
-        let symbolic_reasoner = SymbolicReasoner::new(db.clone());
+        let symbolic_reasoner_inner = SymbolicReasoner::new(db.clone());
         let registry_manager = McpRegistryManager::new(db.clone());
 
         Ok(Self {
             db,
             knowledge_graph,
-            embedding_manager,
-            symbolic_reasoner,
+            embedding_manager: Mutex::new(embedding_manager_inner),
+            symbolic_reasoner: Mutex::new(symbolic_reasoner_inner),
             registry_manager,
+            running_services: HashMap::new(),
         })
     }
 
@@ -82,12 +120,18 @@ impl UnicityOrchestrator {
 
         // Run the embedding update pass so all tools get embeddings before
         // we build the knowledge graph and start serving queries.
-        self.embedding_manager.update_tool_embeddings().await?;
+        {
+            let mut embedding_manager = self.embedding_manager.lock().await;
+            embedding_manager.update_tool_embeddings().await?;
+        }
 
         // Rebuild the knowledge graph from the current database state and
         // load symbolic rules so the orchestrator can answer queries.
         self.knowledge_graph = KnowledgeGraph::build_from_database(&self.db).await?;
-        self.symbolic_reasoner.load_rules().await?;
+        {
+            let mut symbolic_reasoner = self.symbolic_reasoner.lock().await;
+            symbolic_reasoner.load_rules().await?;
+        }
 
         Ok(())
     }
@@ -108,10 +152,6 @@ impl UnicityOrchestrator {
                 Ok(Some(running_service)) => {
                     match mcp_client::inspect_service(&running_service).await {
                         Ok((server_info, tools)) => {
-                            // Persist the service in the database. For now we
-                            // treat all discovered services as coming from
-                            // static configuration; registry/broadcast origins
-                            // can override this when those flows are wired in.
                             let server_info = server_info.server_info;
                             let service = QueryBuilder::upsert_service(
                                 &self.db,
@@ -125,7 +165,12 @@ impl UnicityOrchestrator {
                                     registry_id: None,
                                 },
                             )
-                            .await?;
+                                .await?;
+
+                            // 🔹 keep this rmcp client alive, keyed by the Surreal service id
+                            let service_id = service.id.clone();
+                            let rc = Arc::new(running_service);
+                            self.running_services.insert(service_id, rc.clone());
 
                             discovered_servers += 1;
 
@@ -150,19 +195,33 @@ impl UnicityOrchestrator {
                                     output_ty: None,
                                 };
 
-                                let _tool_record = QueryBuilder::upsert_tool(&self.db, &create_tool).await?;
+                                let _tool_record =
+                                    QueryBuilder::upsert_tool(&self.db, &create_tool).await?;
                                 discovered_tools += 1;
                             }
                         }
                         Err(e) => tracing::error!("Failed to inspect service: {}", e),
                     }
                 }
-                Ok(None) => continue, // Service disabled or not stdio
+                Ok(None) => continue,
                 Err(e) => tracing::error!("Failed to start service: {}", e),
             }
         }
 
         Ok((discovered_servers, discovered_tools))
+    }
+
+    pub async fn execute_selected_tool(
+        &self,
+        selection: &ToolSelection,
+        args: JsonObject,
+    ) -> Result<Vec<Content>> {
+        executor::execute_selection(
+            &self.db,
+            &self.running_services,
+            selection,
+            args,
+        ).await
     }
 
     /// Normalize tool input/output schemas into `TypedSchema` and persist them.
@@ -208,17 +267,19 @@ impl UnicityOrchestrator {
     }
 
     pub async fn query_tools(
-        &mut self,
+        &self,
         query: &str,
         context: Option<Value>,
     ) -> Result<Vec<ToolSelection>> {
         // First, use semantic search to find the most relevant tools for this
         // query. This keeps the symbolic reasoning step focused on a small,
         // semantically coherent subset.
-        let semantic_hits = self
-            .embedding_manager
-            .search_tools_by_embedding(query, 32, 0.25)
-            .await?;
+        let semantic_hits = {
+            let mut embedding_manager = self.embedding_manager.lock().await;
+            embedding_manager
+                .search_tools_by_embedding(query, 32, 0.25)
+                .await?
+        };
 
         let tools: Vec<ToolRecord> = if !semantic_hits.is_empty() {
             // Load only the tools that were returned by semantic search.
@@ -245,9 +306,14 @@ impl UnicityOrchestrator {
             .map(|c| serde_json::from_value(c).unwrap_or_default())
             .unwrap_or_default();
 
-        self.symbolic_reasoner
-            .infer_tool_selection(query, &tools, &context_map)
-            .await
+        let selections = {
+            let mut symbolic_reasoner = self.symbolic_reasoner.lock().await;
+            symbolic_reasoner
+                .infer_tool_selection(query, &tools, &context_map)
+                .await?
+        };
+
+        Ok(selections)
     }
 
     /// High-level convenience API: given a natural-language query and optional
@@ -258,7 +324,7 @@ impl UnicityOrchestrator {
     /// associated reasoning) should be used. Execution is handled by higher
     /// layers (e.g. an executor that calls into rmcp clients).
     pub async fn orchestrate_tool(
-        &mut self,
+        &self,
         query: &str,
         context: Option<Value>,
     ) -> Result<Option<ToolSelection>> {
@@ -266,6 +332,124 @@ impl UnicityOrchestrator {
         // For now, we assume the symbolic reasoner returns selections ordered
         // by descending relevance/score, so we simply take the first one.
         Ok(selections.into_iter().next())
+    }
+
+    /// Construct a simple multi-step plan for a given query by:
+    /// 1. Running the selection pipeline to get ranked tool candidates.
+    /// 2. Taking the top N candidates.
+    /// 3. Loading their tool records from the database.
+    /// 4. Deriving an ordered list of steps with inferred input parameter names.
+    ///
+    /// This is intentionally conservative and can be extended later to use the
+    /// full symbolic planning engine and knowledge graph for type-based
+    /// chaining. For now it gives the LLM a structured set of candidate steps.
+    pub async fn plan_tools_for_query(
+        &self,
+        query: &str,
+        context: Option<Value>, // TODO
+    ) -> Result<Option<PlanResult>> {
+        // 1) Choose candidate tools using the same semantic filter as selection.
+        let semantic_hits = {
+            let mut embedding_manager = self.embedding_manager.lock().await;
+            embedding_manager
+                .search_tools_by_embedding(query, 32, 0.25)
+                .await?
+        };
+
+        let tools: Vec<ToolRecord> = if !semantic_hits.is_empty() {
+            let ids: Vec<_> = semantic_hits
+                .iter()
+                .map(|hit| hit.tool_id.clone())
+                .collect();
+
+            self.db
+                .query("SELECT * FROM tool WHERE id IN $ids")
+                .bind(("ids", ids))
+                .await?
+                .take(0)?
+        } else {
+            self.db
+                .query("SELECT * FROM tool")
+                .await?
+                .take(0)?
+        };
+
+        if tools.is_empty() {
+            return Ok(None);
+        }
+
+        // Build a lookup map so we can enrich plan steps with tool metadata.
+        let mut tool_map: HashMap<surrealdb::RecordId, ToolRecord> = HashMap::new();
+        for tool in &tools {
+            tool_map.insert(tool.id.clone(), tool.clone());
+        }
+
+        // 2) Ask the symbolic reasoner to plan using its backward-chaining engine.
+        let plan_opt = {
+            let mut symbolic_reasoner = self.symbolic_reasoner.lock().await;
+            symbolic_reasoner
+                .plan_tools_for_goal(query, &tools, None)
+                .await?
+        };
+
+        let plan = match plan_opt {
+            Some(p) => p,
+            None => return Ok(None),
+        };
+
+        if plan.steps.is_empty() {
+            return Ok(None);
+        }
+
+        // 3) Convert symbolic ToolPlan steps into our MCP-facing PlanResult.
+        let mut steps = Vec::new();
+        for step in plan.steps {
+            if let Some(tool) = tool_map.get(&step.tool_id) {
+                // Prefer explicit inputs from the symbolic plan; fall back to schema if empty.
+                let mut inputs: Vec<String> = step.inputs.keys().cloned().collect();
+
+                if inputs.is_empty() {
+                    if let Some(schema) = &tool.input_schema {
+                        if let Some(props) = schema
+                            .get("properties")
+                            .and_then(|v| v.as_object())
+                        {
+                            inputs.extend(props.keys().cloned());
+                        }
+                    }
+                }
+
+                let description = tool
+                    .description
+                    .clone()
+                    .unwrap_or_else(|| {
+                        format!("Step {}: call {}", step.step_number, tool.name)
+                    });
+
+                steps.push(PlanStep {
+                    description,
+                    service_id: tool.service_id.clone(),
+                    tool_name: tool.name.clone(),
+                    inputs,
+                });
+            }
+        }
+
+        if steps.is_empty() {
+            return Ok(None);
+        }
+
+        let reasoning = format!(
+            "Plan constructed by symbolic planner for goal \"{}\" using {} steps.",
+            plan.goal,
+            steps.len()
+        );
+
+        Ok(Some(PlanResult {
+            steps,
+            confidence: plan.confidence,
+            reasoning,
+        }))
     }
 }
 
@@ -291,6 +475,294 @@ impl ServerHandler for UnicityOrchestrator {
                  and uses embeddings + symbolic reasoning to select and chain tools."
                     .to_string(),
             ),
+        }
+    }
+
+    fn list_tools(
+        &self,
+        _request: Option<PaginatedRequestParam>,
+        _context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = std::result::Result<ListToolsResult, rmcp::model::ErrorData>> + Send + '_ {
+        async move {
+            // Shared input schema: { query: string, context?: object }
+            let mut input_schema: JsonObject = JsonObject::new();
+            input_schema.insert(
+                "type".to_string(),
+                Value::String("object".to_string()),
+            );
+
+            let mut properties = serde_json::Map::new();
+            properties.insert(
+                "query".to_string(),
+                serde_json::json!({
+                    "type": "string",
+                    "description": "Natural-language query describing the user's goal.",
+                }),
+            );
+            properties.insert(
+                "context".to_string(),
+                serde_json::json!({
+                    "type": "object",
+                    "description": "Optional JSON context to guide tool selection.",
+                    "additionalProperties": true,
+                }),
+            );
+
+            input_schema.insert(
+                "properties".to_string(),
+                Value::Object(properties),
+            );
+            input_schema.insert(
+                "required".to_string(),
+                serde_json::json!(["query"]),
+            );
+
+            // === unicity.select_tool: single-step selection ===
+
+            let mut select_output_schema: JsonObject = JsonObject::new();
+            select_output_schema.insert(
+                "type".to_string(),
+                Value::String("object".to_string()),
+            );
+            select_output_schema.insert(
+                "description".to_string(),
+                Value::String(
+                    "Selection result describing which underlying MCP tool to use and why.".to_string(),
+                ),
+            );
+
+            let select_tool = McpTool {
+                name: Cow::Borrowed("unicity.select_tool"),
+                title: Some("Unicity Orchestrator: Select Tool".to_string()),
+                description: Some(Cow::Owned(
+                    "Given a natural-language query and optional context, return the most appropriate underlying MCP tool to use, without executing it.".to_string(),
+                )),
+                input_schema: Arc::new(input_schema.clone()),
+                output_schema: Some(Arc::new(select_output_schema)),
+                annotations: None,
+                icons: None,
+                meta: None,
+            };
+
+            // === unicity.plan_tools: multi-step planning ===
+
+            let mut plan_output_schema: JsonObject = JsonObject::new();
+            plan_output_schema.insert(
+                "type".to_string(),
+                Value::String("object".to_string()),
+            );
+
+            let mut plan_properties = serde_json::Map::new();
+            plan_properties.insert(
+                "steps".to_string(),
+                serde_json::json!({
+                    "type": "array",
+                    "description": "Proposed sequence of tool invocations to achieve the goal.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "description": { "type": "string" },
+                            "serviceId":  { "type": "string" },
+                            "toolName":   { "type": "string" },
+                            "inputs": {
+                                "type": "array",
+                                "items": { "type": "string" }
+                            }
+                        },
+                        "required": ["description", "serviceId", "toolName"]
+                    }
+                }),
+            );
+            plan_properties.insert(
+                "confidence".to_string(),
+                serde_json::json!({
+                    "type": "number",
+                    "description": "Overall confidence score for the proposed plan."
+                }),
+            );
+            plan_properties.insert(
+                "reasoning".to_string(),
+                serde_json::json!({
+                    "type": "string",
+                    "description": "High-level explanation of why this plan was proposed."
+                }),
+            );
+
+            plan_output_schema.insert(
+                "properties".to_string(),
+                Value::Object(plan_properties),
+            );
+            plan_output_schema.insert(
+                "required".to_string(),
+                serde_json::json!(["steps"]),
+            );
+
+            let plan_tool = McpTool {
+                name: Cow::Borrowed("unicity.plan_tools"),
+                title: Some("Unicity Orchestrator: Plan Tools".to_string()),
+                description: Some(Cow::Owned(
+                    "Given a higher-level goal, propose a multi-step plan using underlying MCP tools, without executing them.".to_string(),
+                )),
+                // Same input schema (query + context), different structured output.
+                input_schema: Arc::new(input_schema),
+                output_schema: Some(Arc::new(plan_output_schema)),
+                annotations: None,
+                icons: None,
+                meta: None,
+            };
+
+            let mut result = ListToolsResult::default();
+            result.tools.push(select_tool);
+            result.tools.push(plan_tool);
+
+            Ok(result)
+        }
+    }
+
+    fn call_tool(
+        &self,
+        request: CallToolRequestParam,
+        _context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<CallToolResult, rmcp::model::ErrorData>> + Send + '_ {
+        async move {
+            let tool_name = request.name.as_ref();
+
+            // Arguments are a JSON object; we expect { query: string, context?: object }.
+            let args: JsonObject = request
+                .arguments
+                .clone()
+                .unwrap_or_default();
+
+            let query = match args.get("query").and_then(|v| v.as_str()) {
+                Some(q) => q.to_string(),
+                None => {
+                    // Missing required `query` argument; return an error message as content.
+                    let payload = serde_json::json!({
+                        "status": "error",
+                        "reason": "unicity.select_tool / unicity.plan_tools requires a `query` string argument"
+                    });
+                    let text = serde_json::to_string(&payload)
+                        .unwrap_or_else(|_| "internal serialization error".to_string());
+                    let content = Content::text(text);
+
+                    return Ok(CallToolResult {
+                        content: vec![content],
+                        structured_content: None,
+                        is_error: None,
+                        meta: None,
+                    });
+                }
+            };
+
+            let context_value = args.get("context").cloned();
+
+            match tool_name {
+                "unicity.select_tool" => {
+                    // Single-step selection: use the orchestrator's selection pipeline.
+                    let selection_result = self.orchestrate_tool(&query, context_value).await;
+
+                    let mut is_error = false;
+                    let payload = match selection_result {
+                        Ok(Some(sel)) => {
+                            serde_json::json!({
+                                "status": "ok",
+                                "selection": {
+                                    "toolId": sel.tool_id.to_string(),
+                                    "toolName": sel.tool_name,
+                                    "serviceId": sel.service_id.to_string(),
+                                    "confidence": sel.confidence,
+                                    "reasoning": sel.reasoning,
+                                    "dependencies": sel.dependencies,
+                                    "estimatedCost": sel.estimated_cost,
+                                }
+                            })
+                        }
+                        Ok(None) => {
+                            is_error = true;
+                            serde_json::json!({
+                                "status": "no_match",
+                                "reason": "No suitable tool was found for this query"
+                            })
+                        },
+                        Err(e) => {
+                            is_error = true;
+                            serde_json::json!({
+                                "status": "error",
+                                "reason": format!("Tool selection failed: {}", e),
+                            })
+                        },
+                    };
+
+                    let text = serde_json::to_string(&payload)
+                        .unwrap_or_else(|_| "internal serialization error".to_string());
+                    let content = Content::text(text);
+
+                    Ok(CallToolResult {
+                        content: vec![content],
+                        structured_content: None,
+                        is_error: Some(is_error),
+                        meta: None,
+                    })
+                }
+
+                "unicity.plan_tools" => {
+                    // Multi-step planning: use the orchestrator's planner to propose
+                    // a sequence of tool invocations.
+                    let plan_result = self.plan_tools_for_query(&query, context_value).await;
+
+                    let mut is_error = false;
+                    let payload = match plan_result {
+                        Ok(Some(plan)) => {
+                            let steps_json: Vec<_> = plan
+                                .steps
+                                .into_iter()
+                                .map(|step| {
+                                    serde_json::json!({
+                                        "description": step.description,
+                                        "serviceId": step.service_id.to_string(),
+                                        "toolName": step.tool_name,
+                                        "inputs": step.inputs,
+                                    })
+                                })
+                                .collect();
+
+                            serde_json::json!({
+                                "status": "ok",
+                                "steps": steps_json,
+                                "confidence": plan.confidence,
+                                "reasoning": plan.reasoning,
+                            })
+                        }
+                        Ok(None) => {
+                            is_error = true;
+                            serde_json::json!({
+                                "status": "no_match",
+                                "reason": "No suitable tools were found to construct a plan for this query"
+                            })
+                        }
+                        Err(e) => {
+                            is_error = true;
+                            serde_json::json!({
+                                "status": "error",
+                                "reason": format!("Tool planning failed: {}", e),
+                            })
+                        }
+                    };
+
+                    let text = serde_json::to_string(&payload)
+                        .unwrap_or_else(|_| "internal serialization error".to_string());
+                    let content = Content::text(text);
+
+                    Ok(CallToolResult {
+                        content: vec![content],
+                        structured_content: None,
+                        is_error: Some(is_error),
+                        meta: None,
+                    })
+                }
+
+                _ => Err(rmcp::model::ErrorData::method_not_found::<CallToolRequestMethod>()),
+            }
         }
     }
 }
