@@ -57,7 +57,7 @@ pub enum ServiceOrigin {
     #[serde(rename = "Registry")]
     Registry,
     #[serde(rename = "Broadcast")]
-    Broadcast { host: String },
+    Broadcast,
 }
 
 /// Persisted representation of a single MCP tool plus analysis metadata.
@@ -114,7 +114,8 @@ pub struct CreateToolRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TypedSchema {
     /// JSON Schema `type` field (e.g. "string", "object", "array").
-    #[serde(rename = "type")]
+    /// Defaults to `"any"` when not present in the source JSON.
+    #[serde(rename = "type", default = "default_schema_type")]
     pub schema_type: String,
     /// Properties for object types, if any.
     pub properties: Option<HashMap<String, Box<TypedSchema>>>,
@@ -124,6 +125,10 @@ pub struct TypedSchema {
     pub required: Option<Vec<String>>,
     /// Optional enum value set for constrained types.
     pub enum_values: Option<Vec<Value>>,
+}
+
+fn default_schema_type() -> String {
+    "any".to_string()
 }
 
 impl TypedSchema {

@@ -32,6 +32,7 @@ impl QueryBuilder {
                     version = $origin,
                     icons = $icons,
                     website_url = $website_url,
+                    origin = $origin,
                     registry_id = $registry_id,
                     created_at = time::now(),
                     updated_at = time::now()

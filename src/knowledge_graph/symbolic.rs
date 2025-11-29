@@ -17,7 +17,7 @@ use surrealdb::{RecordId, Surreal};
 /// rules when multiple apply.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SymbolicRule {
-    pub id: String,
+    pub id: RecordId,
     pub name: String,
     pub description: String,
     pub antecedents: Vec<SymbolicExpression>,

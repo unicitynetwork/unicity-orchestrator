@@ -24,31 +24,47 @@ pub struct RunningService {
 }
 
 pub async fn start_stdio_service(cfg: &McpServiceConfig) -> Result<Option<RunningService>> {
-    if let McpServiceConfig::Stdio { id, disabled, .. } = cfg {
-        if *disabled {
-            info!("Skipping disabled MCP service `{id}`");
-            return Ok(None);
+    match cfg {
+        McpServiceConfig::Stdio {
+            id,
+            command,
+            args,
+            env,
+            disabled,
+            ..
+        } => {
+            if *disabled {
+                info!("Skipping disabled MCP service `{id}`");
+                return Ok(None);
+            }
+
+            info!(
+                "Starting MCP stdio service `{id}` via rmcp: command = `{}`, args = {:?}",
+                command, args
+            );
+
+            // Build the child process: `command` plus `args`, with configured env
+            let mut cmd = Command::new(command);
+            if !args.is_empty() {
+                cmd.args(args);
+            }
+            if !env.is_empty() {
+                cmd.envs(env);
+            }
+
+            let child = TokioChildProcess::new(cmd.configure(|_cmd| {
+                // hook to tweak the Command if needed in future
+            }))?;
+
+            // Start the rmcp client service over stdio and complete MCP initialization.
+            let client = ().serve(child).await?;
+
+            // Use a typed SurrealDB RecordId for this service.
+            let service_id = RecordId::from(("service", id.clone()));
+
+            Ok(Some(RunningService { service_id, client }))
         }
-
-        info!("Starting MCP stdio service `{id}` via rmcp");
-
-        // NOTE: For now we assume that `id` is the command to run. If your
-        // McpServiceConfig has an explicit command / args field, wire that
-        // in here instead of using `id` directly.
-        let child = TokioChildProcess::new(Command::new(id).configure(|_cmd| {
-            // TODO: attach additional args / env from McpServiceConfig when available.
-        }))?;
-
-        // Start the rmcp client service over stdio and complete MCP initialization.
-        // This returns rmcp's `RunningService<RoleClient, ()>` which we store.
-        let client = ().serve(child).await?;
-
-        // Use a typed SurrealDB RecordId for this service.
-        let service_id = RecordId::from(("service", id.clone()));
-
-        Ok(Some(RunningService { service_id, client }))
-    } else {
-        Ok(None)
+        _ => Ok(None),
     }
 }
 
