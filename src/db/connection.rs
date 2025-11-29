@@ -60,8 +60,8 @@ pub async fn ensure_schema(db: &Db) -> Result<()> {
          DEFINE FIELD website_url ON TABLE service TYPE option<string>;
          DEFINE FIELD origin ON TABLE service TYPE string;
          DEFINE FIELD registry_id ON TABLE service TYPE option<record<registry>>;
-         DEFINE FIELD created_at ON TABLE service VALUE time::now() DEFAULT;
-         DEFINE FIELD updated_at ON TABLE service VALUE time::now() DEFAULT;",
+         DEFINE FIELD created_at ON TABLE service VALUE time::now();
+         DEFINE FIELD updated_at ON TABLE service VALUE time::now();",
 
         // Tool table
         "DEFINE TABLE tool SCHEMAFULL;
@@ -74,8 +74,8 @@ pub async fn ensure_schema(db: &Db) -> Result<()> {
          DEFINE FIELD input_ty ON TABLE tool TYPE option<object>;
          DEFINE FIELD output_ty ON TABLE tool TYPE option<object>;
          DEFINE FIELD usage_count ON TABLE tool TYPE number DEFAULT 0;
-         DEFINE FIELD created_at ON TABLE tool VALUE time::now() DEFAULT;
-         DEFINE FIELD updated_at ON TABLE tool VALUE time::now() DEFAULT;",
+         DEFINE FIELD created_at ON TABLE tool VALUE time::now();
+         DEFINE FIELD updated_at ON TABLE tool VALUE time::now();",
 
         // Embedding table
         "DEFINE TABLE embedding SCHEMAFULL;
@@ -83,7 +83,7 @@ pub async fn ensure_schema(db: &Db) -> Result<()> {
          DEFINE FIELD model ON TABLE embedding TYPE string;
          DEFINE FIELD content_type ON TABLE embedding TYPE string;
          DEFINE FIELD content_hash ON TABLE embedding TYPE string;
-         DEFINE FIELD created_at ON TABLE embedding VALUE time::now() DEFAULT;",
+         DEFINE FIELD created_at ON TABLE embedding VALUE time::now();",
 
         // Typed relationship between tools
         "DEFINE TABLE tool_compatibility SCHEMAFULL;
@@ -92,7 +92,7 @@ pub async fn ensure_schema(db: &Db) -> Result<()> {
          DEFINE FIELD compatibility_type ON TABLE tool_compatibility TYPE string;
          DEFINE FIELD confidence ON TABLE tool_compatibility TYPE float DEFAULT 1.0;
          DEFINE FIELD reasoning ON TABLE tool_compatibility TYPE option<string>;
-         DEFINE FIELD created_at ON TABLE tool_compatibility VALUE time::now() DEFAULT;",
+         DEFINE FIELD created_at ON TABLE tool_compatibility VALUE time::now();",
 
         // Tool usage patterns
         "DEFINE TABLE tool_sequence SCHEMAFULL;
@@ -101,16 +101,16 @@ pub async fn ensure_schema(db: &Db) -> Result<()> {
          DEFINE FIELD sequence_type ON TABLE tool_sequence TYPE string;
          DEFINE FIELD frequency ON TABLE tool_sequence TYPE number DEFAULT 1;
          DEFINE FIELD success_rate ON TABLE tool_sequence TYPE float DEFAULT 1.0;
-         DEFINE FIELD created_at ON TABLE tool_sequence VALUE time::now() DEFAULT;",
+         DEFINE FIELD created_at ON TABLE tool_sequence VALUE time::now();",
 
         // Registry information
         "DEFINE TABLE registry SCHEMAFULL;
          DEFINE FIELD url ON TABLE registry TYPE string;
          DEFINE FIELD name ON TABLE registry TYPE string;
          DEFINE FIELD description ON TABLE registry TYPE option<string>;
-         DEFINE FIELD is_active ON TABLE registry TYPE boolean DEFAULT true;
+         DEFINE FIELD is_active ON TABLE registry TYPE bool DEFAULT true;
          DEFINE FIELD last_sync ON TABLE registry TYPE option<datetime>;
-         DEFINE FIELD created_at ON TABLE registry VALUE time::now() DEFAULT;",
+         DEFINE FIELD created_at ON TABLE registry VALUE time::now();",
 
         // MCP manifests from registries
         "DEFINE TABLE manifest SCHEMAFULL;
@@ -119,8 +119,8 @@ pub async fn ensure_schema(db: &Db) -> Result<()> {
          DEFINE FIELD version ON TABLE manifest TYPE string;
          DEFINE FIELD content ON TABLE manifest TYPE object;
          DEFINE FIELD hash ON TABLE manifest TYPE string;
-         DEFINE FIELD is_active ON TABLE manifest TYPE boolean DEFAULT true;
-         DEFINE FIELD created_at ON TABLE manifest VALUE time::now() DEFAULT;",
+         DEFINE FIELD is_active ON TABLE manifest TYPE bool DEFAULT true;
+         DEFINE FIELD created_at ON TABLE manifest VALUE time::now();",
 
         // Indexes for performance
         "DEFINE INDEX tool_service_id ON TABLE tool COLUMNS service_id;
@@ -139,7 +139,7 @@ pub async fn ensure_schema(db: &Db) -> Result<()> {
          DEFINE FIELD confidence ON TABLE symbolic_rule TYPE float;
          DEFINE FIELD priority ON TABLE symbolic_rule TYPE int;
          DEFINE FIELD is_active ON TABLE symbolic_rule TYPE bool DEFAULT true;
-         DEFINE FIELD created_at ON TABLE symbolic_rule VALUE time::now() DEFAULT;",
+         DEFINE FIELD created_at ON TABLE symbolic_rule VALUE time::now();",
     ];
 
     for query in schema_queries {

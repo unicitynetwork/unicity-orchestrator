@@ -33,9 +33,5 @@ chrono = { version = "0.4", features = ["serde"] }
 tempfile = "3.23.0"
 
 [[bin]]
-name = "main"
+name = "unicity-orchestrator"
 path = "src/bin/main.rs"
-
-[[bin]]
-name = "test-runner"
-path = "bin/test_runner.rs"
