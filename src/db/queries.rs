@@ -110,34 +110,30 @@ impl QueryBuilder {
         Ok(tool)
     }
 
-    /// Find tools whose embeddings are similar to the given query vector.
+    /// Find tools by vector similarity against the `embedding` table.
     ///
-    /// This implementation performs a vector search over the `embedding` table
-    /// and then resolves each embedding back to its associated tool via
-    /// `embedding_id` on the `tool` table. It is deliberately simple and can be
-    /// optimized later.
+    /// Returns `(ToolRecord, similarity_score)` tuples.
     pub async fn find_tools_by_embedding(
         db: &Surreal<Any>,
         query_vector: Vec<f32>,
         limit: u32,
         threshold: f32,
     ) -> Result<Vec<(ToolRecord, f32)>> {
-        // First, search the embedding table by vector similarity.
-        // We assume `EmbeddingRecord` has a `vector` field and lives in the
-        // `embedding` table.
+        // We only need the embedding id + score from the embedding table.
         #[derive(Deserialize)]
-        struct EmbeddingWithScore {
-            #[serde(flatten)]
-            embedding: EmbeddingRecord,
+        struct EmbeddingHit {
+            id: RecordId,
             score: f32,
         }
 
         let mut res = db
             .query(
                 r#"
-                SELECT *, vector::similarity::cosine(vector, $query_vec) AS score
+                SELECT
+                    id,
+                    vector::similarity::cosine(vector, $query_vec) AS score
                 FROM embedding
-                WHERE score >= $threshold
+                WHERE vector::similarity::cosine(vector, $query_vec) >= $threshold
                 ORDER BY score DESC
                 LIMIT $limit
                 "#,
@@ -147,10 +143,10 @@ impl QueryBuilder {
             .bind(("limit", limit as i64))
             .await?;
 
-        let rows: Vec<EmbeddingWithScore> = res.take(0)?;
+        let hits: Vec<EmbeddingHit> = res.take(0)?;
         let mut results = Vec::new();
 
-        for row in rows {
+        for hit in hits {
             let mut tool_res = db
                 .query(
                     r#"
@@ -159,11 +155,11 @@ impl QueryBuilder {
                     LIMIT 1
                     "#,
                 )
-                .bind(("embedding_id", row.embedding.id.clone()))
+                .bind(("embedding_id", hit.id.clone()))
                 .await?;
 
             if let Some(tool) = tool_res.take::<Option<ToolRecord>>(0)? {
-                results.push((tool, row.score));
+                results.push((tool, hit.score));
             }
         }
 
