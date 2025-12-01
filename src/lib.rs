@@ -144,7 +144,7 @@ impl UnicityOrchestrator {
         let mut discovered_tools = 0;
 
         for service_config in services {
-            match mcp_client::start_stdio_service(&service_config).await {
+            match mcp_client::start_service(&service_config).await {
                 Ok(Some(running_service)) => {
                     match mcp_client::inspect_service(&running_service).await {
                         Ok((server_info, tools)) => {

@@ -10,6 +10,7 @@ use rmcp::{
     transport::{TokioChildProcess, ConfigureCommandExt},
 };
 use rmcp::model::{CallToolRequestParam, Content, JsonObject};
+use rmcp::transport::StreamableHttpClientTransport;
 use surrealdb::RecordId;
 use tokio::process::Command;
 use tracing::{info, warn};
@@ -24,47 +25,76 @@ pub struct RunningService {
 }
 
 pub async fn start_stdio_service(cfg: &McpServiceConfig) -> Result<Option<RunningService>> {
-    match cfg {
-        McpServiceConfig::Stdio {
-            id,
-            command,
-            args,
-            env,
-            disabled,
-            ..
-        } => {
-            if *disabled {
-                info!("Skipping disabled MCP service `{id}`");
-                return Ok(None);
-            }
-
-            info!(
-                "Starting MCP stdio service `{id}` via rmcp: command = `{}`, args = {:?}",
-                command, args
-            );
-
-            // Build the child process: `command` plus `args`, with configured env
-            let mut cmd = Command::new(command);
-            if !args.is_empty() {
-                cmd.args(args);
-            }
-            if !env.is_empty() {
-                cmd.envs(env);
-            }
-
-            let child = TokioChildProcess::new(cmd.configure(|_cmd| {
-                // hook to tweak the Command if needed in future
-            }))?;
-
-            // Start the rmcp client service over stdio and complete MCP initialization.
-            let client = ().serve(child).await?;
-
-            // Use a typed SurrealDB RecordId for this service.
-            let service_id = RecordId::from(("service", id.clone()));
-
-            Ok(Some(RunningService { service_id, client }))
+    if let McpServiceConfig::Stdio {
+        id,
+        command,
+        args,
+        env,
+        disabled,
+        ..
+    } = cfg
+    {
+        if *disabled {
+            info!("Skipping disabled MCP stdio service `{id}`");
+            return Ok(None);
         }
-        _ => Ok(None),
+
+        info!("Starting MCP stdio service `{id}` via rmcp");
+
+        let mut cmd = Command::new(command);
+        if !args.is_empty() {
+            cmd.args(args.iter().cloned());
+        }
+        if !env.is_empty() {
+            cmd.envs(env.iter().map(|(k, v)| (k, v)));
+        }
+
+        let child = TokioChildProcess::new(cmd.configure(|_cmd| {
+            // extra configuration if needed
+        }))?;
+
+        let client = ().serve(child).await?;
+
+        let service_id = RecordId::from(("service", id.clone()));
+        Ok(Some(RunningService { service_id, client }))
+    } else {
+        Ok(None)
+    }
+}
+
+pub async fn start_http_service(cfg: &McpServiceConfig) -> Result<Option<RunningService>> {
+    if let McpServiceConfig::Http {
+        id,
+        url,
+        headers: _,
+        disabled,
+        ..
+    } = cfg
+    {
+        if *disabled {
+            info!("Skipping disabled MCP HTTP service `{id}`");
+            return Ok(None);
+        }
+
+        info!("Starting MCP HTTP service `{id}` at `{url}` via rmcp streamable HTTP");
+
+        // Build HTTP transport (Result -> WorkerTransport)
+        let transport = StreamableHttpClientTransport::from_uri(url.as_str());
+
+        // Keep the same client type as stdio: RmcpRunningService<RoleClient, ()>
+        let client = ().serve(transport).await?;
+
+        let service_id = RecordId::from(("service", id.clone()));
+        Ok(Some(RunningService { service_id, client }))
+    } else {
+        Ok(None)
+    }
+}
+
+pub async fn start_service(cfg: &McpServiceConfig) -> Result<Option<RunningService>> {
+    match cfg {
+        McpServiceConfig::Stdio { .. } => start_stdio_service(cfg).await,
+        McpServiceConfig::Http { .. } => start_http_service(cfg).await,
     }
 }
 
