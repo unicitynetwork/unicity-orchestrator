@@ -510,17 +510,17 @@ impl ServerHandler for UnicityOrchestrator {
             properties.insert(
                 "query".to_string(),
                 serde_json::json!({
-                    "type": "string",
-                    "description": "Natural-language query describing the user's goal.",
-                }),
+                "type": "string",
+                "description": "Natural-language query describing the user's goal.",
+            }),
             );
             properties.insert(
                 "context".to_string(),
                 serde_json::json!({
-                    "type": "object",
-                    "description": "Optional JSON context to guide tool selection.",
-                    "additionalProperties": true,
-                }),
+                "type": "object",
+                "description": "Optional JSON context to guide tool selection.",
+                "additionalProperties": true,
+            }),
             );
 
             input_schema.insert(
@@ -571,36 +571,36 @@ impl ServerHandler for UnicityOrchestrator {
             plan_properties.insert(
                 "steps".to_string(),
                 serde_json::json!({
-                    "type": "array",
-                    "description": "Proposed sequence of tool invocations to achieve the goal.",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "description": { "type": "string" },
-                            "serviceId":  { "type": "string" },
-                            "toolName":   { "type": "string" },
-                            "inputs": {
-                                "type": "array",
-                                "items": { "type": "string" }
-                            }
-                        },
-                        "required": ["description", "serviceId", "toolName"]
-                    }
-                }),
+                "type": "array",
+                "description": "Proposed sequence of tool invocations to achieve the goal.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "description": { "type": "string" },
+                        "serviceId":  { "type": "string" },
+                        "toolName":   { "type": "string" },
+                        "inputs": {
+                            "type": "array",
+                            "items": { "type": "string" }
+                        }
+                    },
+                    "required": ["description", "serviceId", "toolName"]
+                }
+            }),
             );
             plan_properties.insert(
                 "confidence".to_string(),
                 serde_json::json!({
-                    "type": "number",
-                    "description": "Overall confidence score for the proposed plan."
-                }),
+                "type": "number",
+                "description": "Overall confidence score for the proposed plan."
+            }),
             );
             plan_properties.insert(
                 "reasoning".to_string(),
                 serde_json::json!({
-                    "type": "string",
-                    "description": "High-level explanation of why this plan was proposed."
-                }),
+                "type": "string",
+                "description": "High-level explanation of why this plan was proposed."
+            }),
             );
 
             plan_output_schema.insert(
@@ -619,8 +619,55 @@ impl ServerHandler for UnicityOrchestrator {
                     "Given a higher-level goal, propose a multi-step plan using underlying MCP tools, without executing them.".to_string(),
                 )),
                 // Same input schema (query + context), different structured output.
-                input_schema: Arc::new(input_schema),
+                input_schema: Arc::new(input_schema.clone()),
                 output_schema: Some(Arc::new(plan_output_schema)),
+                annotations: None,
+                icons: None,
+                meta: None,
+            };
+
+            // === unicity.execute_tool: execute a selected tool by toolId ===
+
+            let mut exec_input_schema: JsonObject = JsonObject::new();
+            exec_input_schema.insert(
+                "type".to_string(),
+                Value::String("object".to_string()),
+            );
+
+            let mut exec_props = serde_json::Map::new();
+            exec_props.insert(
+                "toolId".to_string(),
+                serde_json::json!({
+                "type": "string",
+                "description": "The orchestrator toolId of the tool to execute (e.g. 'tool:abc123')."
+            }),
+            );
+            exec_props.insert(
+                "args".to_string(),
+                serde_json::json!({
+                "type": "object",
+                "description": "Arguments to pass to the underlying MCP tool, shaped according to its inputSchema.",
+                "additionalProperties": true
+            }),
+            );
+
+            exec_input_schema.insert(
+                "properties".to_string(),
+                Value::Object(exec_props),
+            );
+            exec_input_schema.insert(
+                "required".to_string(),
+                serde_json::json!(["toolId", "args"]),
+            );
+
+            let exec_tool = McpTool {
+                name: Cow::Borrowed("unicity.execute_tool"),
+                title: Some("Unicity Orchestrator: Execute Tool".to_string()),
+                description: Some(Cow::Owned(
+                    "Execute a previously selected underlying MCP tool by toolId with the given arguments.".to_string(),
+                )),
+                input_schema: Arc::new(exec_input_schema),
+                output_schema: None, // you can add a structured output later
                 annotations: None,
                 icons: None,
                 meta: None,
@@ -629,6 +676,7 @@ impl ServerHandler for UnicityOrchestrator {
             let mut result = ListToolsResult::default();
             result.tools.push(select_tool);
             result.tools.push(plan_tool);
+            result.tools.push(exec_tool);
 
             Ok(result)
         }
@@ -642,7 +690,7 @@ impl ServerHandler for UnicityOrchestrator {
         async move {
             let tool_name = request.name.as_ref();
 
-            // Arguments are a JSON object; we expect { query: string, context?: object }.
+            // Arguments are a JSON object; we expect { query: string, context?: object } for selection/plan.
             let args: JsonObject = request
                 .arguments
                 .clone()
@@ -651,21 +699,26 @@ impl ServerHandler for UnicityOrchestrator {
             let query = match args.get("query").and_then(|v| v.as_str()) {
                 Some(q) => q.to_string(),
                 None => {
-                    // Missing required `query` argument; return an error message as content.
-                    let payload = serde_json::json!({
+                    // For select_tool / plan_tools, `query` is required. For execute_tool we handle separately below.
+                    if tool_name == "unicity.execute_tool" {
+                        // execute_tool has a different schema; don't error here.
+                    } else {
+                        let payload = serde_json::json!({
                         "status": "error",
                         "reason": "unicity.select_tool / unicity.plan_tools requires a `query` string argument"
                     });
-                    let text = serde_json::to_string(&payload)
-                        .unwrap_or_else(|_| "internal serialization error".to_string());
-                    let content = Content::text(text);
+                        let text = serde_json::to_string(&payload)
+                            .unwrap_or_else(|_| "internal serialization error".to_string());
+                        let content = Content::text(text);
 
-                    return Ok(CallToolResult {
-                        content: vec![content],
-                        structured_content: None,
-                        is_error: None,
-                        meta: None,
-                    });
+                        return Ok(CallToolResult {
+                            content: vec![content],
+                            structured_content: None,
+                            is_error: Some(true),
+                            meta: None,
+                        });
+                    }
+                    String::new()
                 }
             };
 
@@ -679,32 +732,71 @@ impl ServerHandler for UnicityOrchestrator {
                     let mut is_error = false;
                     let payload = match selection_result {
                         Ok(Some(sel)) => {
-                            serde_json::json!({
-                                "status": "ok",
-                                "selection": {
-                                    "toolId": sel.tool_id.to_string(),
-                                    "toolName": sel.tool_name,
-                                    "serviceId": sel.service_id.to_string(),
-                                    "confidence": sel.confidence,
-                                    "reasoning": sel.reasoning,
-                                    "dependencies": sel.dependencies,
-                                    "estimatedCost": sel.estimated_cost,
+                            // Load the full ToolRecord so we can include schemas.
+                            let db_res = self.db
+                                .query("SELECT * FROM $id")
+                                .bind(("id", sel.tool_id.clone()))
+                                .await;
+
+                            match db_res {
+                                Ok(mut res) => {
+                                    let tool_res = res.take::<Option<ToolRecord>>(0);
+                                    match tool_res {
+                                        Ok(Some(tool)) => {
+                                            serde_json::json!({
+                                            "status": "ok",
+                                            "selection": {
+                                                "toolId": tool.id.to_string(),
+                                                "toolName": tool.name,
+                                                "serviceId": tool.service_id.to_string(),
+                                                "confidence": sel.confidence,
+                                                "reasoning": sel.reasoning,
+                                                "dependencies": sel.dependencies,
+                                                "estimatedCost": sel.estimated_cost,
+                                                // Expose schemas so the LLM can fill args correctly
+                                                "inputSchema": tool.input_schema,
+                                                "outputSchema": tool.output_schema,
+                                            }
+                                        })
+                                        }
+                                        Ok(None) => {
+                                            is_error = true;
+                                            serde_json::json!({
+                                            "status": "error",
+                                            "reason": "Selected tool not found in database"
+                                        })
+                                        }
+                                        Err(e) => {
+                                            is_error = true;
+                                            serde_json::json!({
+                                            "status": "error",
+                                            "reason": format!("Failed to decode ToolRecord: {}", e),
+                                        })
+                                        }
+                                    }
                                 }
-                            })
+                                Err(e) => {
+                                    is_error = true;
+                                    serde_json::json!({
+                                    "status": "error",
+                                    "reason": format!("Database error while loading tool: {}", e),
+                                })
+                                }
+                            }
                         }
                         Ok(None) => {
                             is_error = true;
                             serde_json::json!({
-                                "status": "no_match",
-                                "reason": "No suitable tool was found for this query"
-                            })
+                            "status": "no_match",
+                            "reason": "No suitable tool was found for this query"
+                        })
                         },
                         Err(e) => {
                             is_error = true;
                             serde_json::json!({
-                                "status": "error",
-                                "reason": format!("Tool selection failed: {}", e),
-                            })
+                            "status": "error",
+                            "reason": format!("Tool selection failed: {}", e),
+                        })
                         },
                     };
 
@@ -733,34 +825,34 @@ impl ServerHandler for UnicityOrchestrator {
                                 .into_iter()
                                 .map(|step| {
                                     serde_json::json!({
-                                        "description": step.description,
-                                        "serviceId": step.service_id.to_string(),
-                                        "toolName": step.tool_name,
-                                        "inputs": step.inputs,
-                                    })
+                                    "description": step.description,
+                                    "serviceId": step.service_id.to_string(),
+                                    "toolName": step.tool_name,
+                                    "inputs": step.inputs,
+                                })
                                 })
                                 .collect();
 
                             serde_json::json!({
-                                "status": "ok",
-                                "steps": steps_json,
-                                "confidence": plan.confidence,
-                                "reasoning": plan.reasoning,
-                            })
+                            "status": "ok",
+                            "steps": steps_json,
+                            "confidence": plan.confidence,
+                            "reasoning": plan.reasoning,
+                        })
                         }
                         Ok(None) => {
                             is_error = true;
                             serde_json::json!({
-                                "status": "no_match",
-                                "reason": "No suitable tools were found to construct a plan for this query"
-                            })
+                            "status": "no_match",
+                            "reason": "No suitable tools were found to construct a plan for this query"
+                        })
                         }
                         Err(e) => {
                             is_error = true;
                             serde_json::json!({
-                                "status": "error",
-                                "reason": format!("Tool planning failed: {}", e),
-                            })
+                            "status": "error",
+                            "reason": format!("Tool planning failed: {}", e),
+                        })
                         }
                     };
 
@@ -774,6 +866,151 @@ impl ServerHandler for UnicityOrchestrator {
                         is_error: Some(is_error),
                         meta: None,
                     })
+                }
+
+                "unicity.execute_tool" => {
+                    // Execute a previously selected tool by toolId with given args.
+                    let args_obj: JsonObject = request
+                        .arguments
+                        .clone()
+                        .unwrap_or_default();
+
+                    let tool_id_str = match args_obj.get("toolId").and_then(|v| v.as_str()) {
+                        Some(s) => s.to_string(),
+                        None => {
+                            let payload = serde_json::json!({
+                            "status": "error",
+                            "reason": "unicity.execute_tool requires a `toolId` string"
+                        });
+                            let text = serde_json::to_string(&payload)
+                                .unwrap_or_else(|_| "internal serialization error".to_string());
+                            let content = Content::text(text);
+
+                            return Ok(CallToolResult {
+                                content: vec![content],
+                                structured_content: None,
+                                is_error: Some(true),
+                                meta: None,
+                            });
+                        }
+                    };
+
+                    // Arguments to pass to underlying MCP tool.
+                    let tool_args: JsonObject = args_obj
+                        .get("args")
+                        .and_then(|v| v.as_object())
+                        .cloned()
+                        .unwrap_or_default();
+
+                    // Look up tool by id string using type::thing so we don't parse RecordId in Rust.
+                    let db_res = self.db
+                        .query("SELECT * FROM type::thing($id)")
+                        .bind(("id", tool_id_str.clone()))
+                        .await;
+
+                    let mut is_error = false;
+
+                    let tool: Option<ToolRecord> = match db_res {
+                        Ok(mut res) => {
+                            match res.take(0) {
+                                Ok(t) => t,
+                                Err(e) => {
+                                    is_error = true;
+                                    let payload = serde_json::json!({
+                                    "status": "error",
+                                    "reason": format!("Failed to decode ToolRecord: {}", e),
+                                });
+                                    let text = serde_json::to_string(&payload)
+                                        .unwrap_or_else(|_| "internal serialization error".to_string());
+                                    let content = Content::text(text);
+
+                                    return Ok(CallToolResult {
+                                        content: vec![content],
+                                        structured_content: None,
+                                        is_error: Some(true),
+                                        meta: None,
+                                    });
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            is_error = true;
+                            let payload = serde_json::json!({
+                            "status": "error",
+                            "reason": format!("Database error while loading tool: {}", e),
+                        });
+                            let text = serde_json::to_string(&payload)
+                                .unwrap_or_else(|_| "internal serialization error".to_string());
+                            let content = Content::text(text);
+
+                            return Ok(CallToolResult {
+                                content: vec![content],
+                                structured_content: None,
+                                is_error: Some(true),
+                                meta: None,
+                            });
+                        }
+                    };
+
+                    let tool = match tool {
+                        Some(t) => t,
+                        None => {
+                            let payload = serde_json::json!({
+                            "status": "error",
+                            "reason": format!("No tool found with id {}", tool_id_str),
+                        });
+                            let text = serde_json::to_string(&payload)
+                                .unwrap_or_else(|_| "internal serialization error".to_string());
+                            let content = Content::text(text);
+
+                            return Ok(CallToolResult {
+                                content: vec![content],
+                                structured_content: None,
+                                is_error: Some(true),
+                                meta: None,
+                            });
+                        }
+                    };
+
+                    let selection = ToolSelection {
+                        tool_id: tool.id.clone(),
+                        tool_name: tool.name.clone(),
+                        service_id: tool.service_id.clone(),
+                        confidence: 1.0,
+                        reasoning: "Direct execution via unicity.execute_tool".to_string(),
+                        dependencies: Vec::new(),
+                        estimated_cost: None,
+                    };
+
+                    let exec_res = self.execute_selected_tool(&selection, tool_args).await;
+
+                    match exec_res {
+                        Ok(contents) => {
+                            // Pass through underlying MCP content directly.
+                            Ok(CallToolResult {
+                                content: contents,
+                                structured_content: None,
+                                is_error: Some(false),
+                                meta: None,
+                            })
+                        }
+                        Err(e) => {
+                            let payload = serde_json::json!({
+                            "status": "error",
+                            "reason": format!("Tool execution failed: {}", e),
+                        });
+                            let text = serde_json::to_string(&payload)
+                                .unwrap_or_else(|_| "internal serialization error".to_string());
+                            let content = Content::text(text);
+
+                            Ok(CallToolResult {
+                                content: vec![content],
+                                structured_content: None,
+                                is_error: Some(true),
+                                meta: None,
+                            })
+                        }
+                    }
                 }
 
                 _ => Err(rmcp::model::ErrorData::method_not_found::<CallToolRequestMethod>()),
