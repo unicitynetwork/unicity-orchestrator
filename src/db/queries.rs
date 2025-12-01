@@ -80,7 +80,7 @@ impl QueryBuilder {
             .bind(("service_id", data.service_id.clone()))
             .bind(("name", data.name.clone()))
             .bind(("description", data.description.clone()))
-            .bind(("input_schema", data.input_schema.clone()))
+            .bind(("input_schema", Value::Object(data.input_schema.clone())))
             .bind(("output_schema", data.output_schema.clone()))
             .bind(("embedding_id", data.embedding_id.clone()))
             .bind(("input_ty", data.input_ty.clone()))

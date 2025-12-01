@@ -64,11 +64,11 @@ pub async fn ensure_schema(db: &Db) -> Result<()> {
          DEFINE FIELD updated_at ON TABLE service VALUE time::now();",
 
         // Tool table
-        "DEFINE TABLE tool SCHEMAFULL;
+        "DEFINE TABLE tool SCHEMALESS;
          DEFINE FIELD service_id ON TABLE tool TYPE record<service>;
          DEFINE FIELD name ON TABLE tool TYPE string;
          DEFINE FIELD description ON TABLE tool TYPE option<string>;
-         DEFINE FIELD input_schema ON TABLE tool TYPE option<object>;
+         DEFINE FIELD input_schema ON TABLE tool TYPE object;
          DEFINE FIELD output_schema ON TABLE tool TYPE option<object>;
          DEFINE FIELD embedding_id ON TABLE tool TYPE option<record<embedding>>;
          DEFINE FIELD input_ty ON TABLE tool TYPE option<object>;

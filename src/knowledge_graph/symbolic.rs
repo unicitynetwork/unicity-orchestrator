@@ -2,6 +2,8 @@ use std::cmp::PartialEq;
 use anyhow::{Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use rmcp::model::JsonObject;
+use serde_json::Value;
 use surrealdb::engine::any::Any;
 use surrealdb::{RecordId, Surreal};
 
@@ -115,8 +117,8 @@ pub struct WorkingMemory {
 pub struct ToolState {
     pub tool_id: RecordId,
     pub status: ToolStatus,
-    pub last_output: Option<serde_json::Value>,
-    pub input_requirements: Option<serde_json::Value>,
+    pub last_output: Option<Value>,
+    pub input_requirements: JsonObject,
     pub execution_count: u32,
     pub success_rate: f32,
 }

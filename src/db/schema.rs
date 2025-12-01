@@ -1,9 +1,9 @@
 use serde::{Deserialize, Serialize};
 use surrealdb::{RecordId, sql::Datetime};
 use std::collections::HashMap;
-use rmcp::model::Icon;
+use rmcp::model::{Icon, JsonObject};
 use rmcp::schemars;
-use serde_json::Value;
+use serde_json::{from_value, Value};
 
 /// Persisted representation of an MCP service in SurrealDB.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -72,9 +72,9 @@ pub struct ToolRecord {
     /// Optional human-readable description from the manifest.
     pub description: Option<String>,
     /// Raw JSON schema describing the tool input.
-    pub input_schema: Option<serde_json::Value>,
+    pub input_schema: JsonObject,
     /// Raw JSON schema describing the tool output.
-    pub output_schema: Option<serde_json::Value>,
+    pub output_schema: Option<JsonObject>,
     /// Optional reference to the stored embedding for this tool.
     pub embedding_id: Option<RecordId>,
     /// Normalized, typed representation of the input schema.
@@ -99,9 +99,9 @@ pub struct CreateToolRecord {
     /// Optional human-readable description.
     pub description: Option<String>,
     /// Raw JSON schema describing the tool input.
-    pub input_schema: Option<serde_json::Value>,
+    pub input_schema: JsonObject,
     /// Raw JSON schema describing the tool output.
-    pub output_schema: Option<serde_json::Value>,
+    pub output_schema: Option<JsonObject>,
     /// Optional reference to the stored embedding for this tool.
     pub embedding_id: Option<RecordId>,
     /// Normalized input schema.
@@ -132,41 +132,22 @@ fn default_schema_type() -> String {
 }
 
 impl TypedSchema {
+
     /// Construct a `TypedSchema` from a JSON Schema-like value.
     ///
-    /// This is intentionally conservative and only understands a subset
-    /// of JSON Schema:
-    /// - `type`: "string" | "integer" | "number" | "boolean" | "null" | "object" | "array"
-    /// - `type`: [ ... ] where elements are primitive type strings (treated as a union)
-    /// - `properties` and `required` for objects
-    /// - `items` for arrays
-    ///
-    /// Everything else is carried through in a minimal way, with the
-    /// top-level `schema_type` set to `"any"` when the type cannot be
-    /// determined. This is sufficient for building a symbolic graph of
-    /// tool I/O compatibility.
-    pub fn from_json_schema(schema: &Value) -> Self {
-        // Helper to create a basic TypedSchema with just a type string.
-        fn simple(schema_type: &str) -> TypedSchema {
-            TypedSchema {
-                schema_type: schema_type.to_string(),
-                properties: None,
-                items: None,
-                required: None,
-                enum_values: None,
-            }
-        }
-
-        // Handle `type` first if present.
+    /// This version expects a JsonObject (serde_json::Map<String, Value>)
+    /// at the top level, and recurses into nested `Value`s.
+    pub fn from_json_schema(schema: &JsonObject) -> Self {
+        // 1) explicit `type`
         if let Some(type_value) = schema.get("type") {
             match type_value {
                 Value::String(s) => match s.as_str() {
                     "object" => {
                         // Object with properties and required fields.
-                        let mut props = std::collections::HashMap::new();
+                        let mut props = HashMap::new();
                         if let Some(Value::Object(map)) = schema.get("properties") {
                             for (name, prop_schema) in map {
-                                let child = TypedSchema::from_json_schema(prop_schema);
+                                let child = Self::from_value(prop_schema);
                                 props.insert(name.clone(), Box::new(child));
                             }
                         }
@@ -191,7 +172,7 @@ impl TypedSchema {
                     "array" => {
                         let item_schema = schema
                             .get("items")
-                            .map(TypedSchema::from_json_schema)
+                            .map(Self::from_value)
                             .map(Box::new);
 
                         TypedSchema {
@@ -202,11 +183,11 @@ impl TypedSchema {
                             enum_values: None,
                         }
                     }
-                    other => simple(other),
+                    other => Self::simple(other),
                 },
                 Value::Array(arr) => {
-                    // type: ["string", "null"] etc. -> we mark the overall type as "union"
-                    // and store the raw type strings as enum_values for inspection.
+                    // type: ["string", "null"] etc. -> mark overall type as "union"
+                    // and store raw type strings in enum_values.
                     let mut types = Vec::new();
                     for v in arr {
                         if let Value::String(s) = v {
@@ -222,11 +203,10 @@ impl TypedSchema {
                         enum_values: if types.is_empty() { None } else { Some(types) },
                     }
                 }
-                _ => simple("any"),
+                _ => Self::simple("any"),
             }
+        // 2) anyOf / oneOf
         } else if let Some(variants) = schema.get("anyOf").or_else(|| schema.get("oneOf")) {
-            // anyOf/oneOf: treat as a union of subschemas; we record the raw
-            // subschemas in enum_values for inspection and keep schema_type = "union".
             if let Value::Array(arr) = variants {
                 let mut variants_json = Vec::new();
                 for v in arr {
@@ -245,11 +225,70 @@ impl TypedSchema {
                     },
                 }
             } else {
-                simple("any")
+                Self::simple("any")
             }
+        // 3) infer `object` from properties even without `type`
+        } else if schema.get("properties").is_some() {
+            let mut props = HashMap::new();
+            if let Some(Value::Object(map)) = schema.get("properties") {
+                for (name, prop_schema) in map {
+                    let child = Self::from_value(prop_schema);
+                    props.insert(name.clone(), Box::new(child));
+                }
+            }
+
+            let required = schema
+                .get("required")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                        .collect::<Vec<_>>()
+                });
+
+            TypedSchema {
+                schema_type: "object".to_string(),
+                properties: if props.is_empty() { None } else { Some(props) },
+                items: None,
+                required,
+                enum_values: None,
+            }
+        // 4) infer `array` from items
+        } else if schema.get("items").is_some() {
+            let item_schema = schema
+                .get("items")
+                .map(Self::from_value)
+                .map(Box::new);
+
+            TypedSchema {
+                schema_type: "array".to_string(),
+                properties: None,
+                items: item_schema,
+                required: None,
+                enum_values: None,
+            }
+        // 5) truly unknown
         } else {
-            // Fallback: we don't understand this schema; mark as `any`.
-            simple("any")
+            Self::simple("any")
+        }
+    }
+
+    // small helper for primitive types
+    fn simple(schema_type: &str) -> TypedSchema {
+        TypedSchema {
+            schema_type: schema_type.to_string(),
+            properties: None,
+            items: None,
+            required: None,
+            enum_values: None,
+        }
+    }
+
+    // helper that can handle any Value
+    fn from_value(value: &Value) -> TypedSchema {
+        match value {
+            Value::Object(map) => Self::from_json_schema(map),
+            _ => Self::simple("any"),
         }
     }
 }
@@ -464,8 +503,8 @@ pub struct ExecutionGraph {
 pub struct ExecutionNode {
     pub id: String,
     pub tool_id: RecordId,
-    pub inputs: Option<serde_json::Value>,
-    pub outputs: Option<serde_json::Value>,
+    pub inputs: Option<Value>,
+    pub outputs: Option<Value>,
     pub status: ExecutionStatus,
 }
 
@@ -493,7 +532,7 @@ pub struct ExecutionEdge {
 pub struct PlanStep {
     pub step_number: u32,
     pub tool_id: RecordId,
-    pub inputs: Option<serde_json::Value>,
+    pub inputs: Option<Value>,
     pub expected_outputs: Vec<String>,
     pub parallel: bool,
     pub dependencies: Vec<u32>,

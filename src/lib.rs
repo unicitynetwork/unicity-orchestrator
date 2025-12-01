@@ -24,21 +24,17 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use rmcp::{
-    ServerHandler,
-    model::{
-        ServerInfo,
-        ServerCapabilities,
-        ProtocolVersion,
-        Implementation,
-        Tool as McpTool,
-        JsonObject,
-        ListToolsResult,
-        Content,
-        PaginatedRequestParam,
-    },
-    RoleServer,
-};
+use rmcp::{ServerHandler, model::{
+    ServerInfo,
+    ServerCapabilities,
+    ProtocolVersion,
+    Implementation,
+    Tool as McpTool,
+    JsonObject,
+    ListToolsResult,
+    Content,
+    PaginatedRequestParam,
+}, RoleServer};
 use rmcp::model::{CallToolRequestMethod, CallToolRequestParam, CallToolResult};
 use rmcp::service::RequestContext;
 use crate::knowledge_graph::{SymbolicReasoner, ToolSelection};
@@ -175,11 +171,11 @@ impl UnicityOrchestrator {
                             discovered_servers += 1;
 
                             for tool in tools {
-                                let input_schema = Value::Object((*tool.input_schema).clone());
+                                let input_schema = (*tool.input_schema).clone();
                                 let output_schema = tool
                                     .output_schema
                                     .as_ref()
-                                    .map(|schema| Value::Object((**schema).clone()));
+                                    .map(|schema| (**schema).clone());
 
                                 let create_tool = CreateToolRecord {
                                     service_id: service.id.clone(),
@@ -188,7 +184,7 @@ impl UnicityOrchestrator {
                                         .description
                                         .as_ref()
                                         .map(|d| d.to_string()),
-                                    input_schema: Some(input_schema),
+                                    input_schema,
                                     output_schema,
                                     embedding_id: None,
                                     input_ty: None,
@@ -237,15 +233,14 @@ impl UnicityOrchestrator {
         let tools: Vec<ToolRecord> = res.take(0)?;
 
         for tool in tools {
-            let input_ty = tool
-                .input_schema
-                .as_ref()
-                .map(|schema| TypedSchema::from_json_schema(schema));
+            let input_ty = TypedSchema::from_json_schema(&tool.input_schema);
 
             let output_ty = tool
                 .output_schema
                 .as_ref()
-                .map(|schema| TypedSchema::from_json_schema(schema));
+                .map(|schema| {
+                    TypedSchema::from_json_schema(schema)
+                });
 
             self.db
                 .query(
@@ -312,6 +307,30 @@ impl UnicityOrchestrator {
                 .infer_tool_selection(query, &tools, &context_map)
                 .await?
         };
+
+        // If symbolic reasoning produced no selections, fall back to raw embedding hits.
+        if selections.is_empty() && !semantic_hits.is_empty() {
+            let mut fallback = Vec::new();
+
+            for hit in &semantic_hits {
+                if let Some(tool) = &hit.tool {
+                    fallback.push(ToolSelection {
+                        tool_id: tool.id.clone(),
+                        tool_name: tool.name.clone(),
+                        service_id: tool.service_id.clone(),
+                        confidence: hit.similarity,
+                        reasoning: format!(
+                            "Selected by cosine similarity {:.3} to query embedding",
+                            hit.similarity
+                        ),
+                        dependencies: Vec::new(),
+                        estimated_cost: None,
+                    });
+                }
+            }
+
+            return Ok(fallback);
+        }
 
         Ok(selections)
     }
@@ -408,15 +427,11 @@ impl UnicityOrchestrator {
                 // Prefer explicit inputs from the symbolic plan; fall back to schema if empty.
                 let mut inputs: Vec<String> = step.inputs.keys().cloned().collect();
 
-                if inputs.is_empty() {
-                    if let Some(schema) = &tool.input_schema {
-                        if let Some(props) = schema
-                            .get("properties")
-                            .and_then(|v| v.as_object())
-                        {
-                            inputs.extend(props.keys().cloned());
-                        }
-                    }
+                if let Some(props) = tool.input_schema
+                    .get("properties")
+                    .and_then(|v| v.as_object())
+                {
+                    inputs.extend(props.keys().cloned());
                 }
 
                 let description = tool

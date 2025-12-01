@@ -11,6 +11,8 @@ use embed_anything::{
     embeddings::embed::{Embedder, EmbedderBuilder},
     embed_query,
 };
+use rmcp::model::JsonObject;
+use serde_json::{json, Value};
 
 pub struct EmbeddingManager {
     db: Surreal<Any>,
@@ -111,10 +113,8 @@ impl EmbeddingManager {
         }
 
         // Include input schema information
-        if let Some(input_schema) = &tool.input_schema {
-            if let Ok(schema_text) = self.schema_to_text(input_schema) {
-                text_parts.push(format!("Input: {}", schema_text));
-            }
+        if let Ok(schema_text) = self.schema_to_text(&tool.input_schema) {
+            text_parts.push(format!("Input: {}", schema_text));
         }
 
         // Include type information
@@ -127,6 +127,7 @@ impl EmbeddingManager {
         }
 
         let combined_text = text_parts.join("\n");
+        println!("{}", combined_text);
         self.embed_text(&combined_text).await
     }
 
@@ -266,11 +267,7 @@ impl EmbeddingManager {
             let embedding = self.embed_tool(&tool).await?;
 
             // Build a stable content hash for this tool's semantic description.
-            let schema_str = tool
-                .input_schema
-                .as_ref()
-                .map(|s| serde_json::to_string(s).unwrap_or_default())
-                .unwrap_or_default();
+            let schema_str = serde_json::to_string(&tool.input_schema)?;
 
             let content_hash = self.hash_content(&format!(
                 "{}:{}:{}",
@@ -317,26 +314,8 @@ impl EmbeddingManager {
         format!("{:x}", hasher.finalize())
     }
 
-    fn schema_to_text(&self, schema: &serde_json::Value) -> Result<String> {
-        if let Some(obj) = schema.as_object() {
-            let mut parts = Vec::new();
-
-            if let Some(description) = obj.get("description").and_then(|v| v.as_str()) {
-                parts.push(description.to_string());
-            }
-
-            if let Some(properties) = obj.get("properties").and_then(|v| v.as_object()) {
-                for (name, prop) in properties {
-                    if let Some(prop_type) = prop.get("type").and_then(|v| v.as_str()) {
-                        parts.push(format!("{}: {}", name, prop_type));
-                    }
-                }
-            }
-
-            Ok(parts.join(", "))
-        } else {
-            Ok(serde_json::to_string(schema)?)
-        }
+    fn schema_to_text(&self, schema: &JsonObject) -> Result<String> {
+        Ok(serde_json::to_string(&schema)?)
     }
 
     fn typed_schema_to_text(&self, schema: &crate::db::schema::TypedSchema) -> String {
