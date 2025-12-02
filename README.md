@@ -53,6 +53,150 @@ This design ensures fast, predictable, and cost-efficient orchestration while ke
 
 ## Quick Start
 
+## Docker Deployment
+
+Unicity Orchestrator can be run fully containerized together with SurrealDB.
+
+### Using Docker Compose
+
+The repository includes a `docker-compose.yml` file that launches:
+
+- **SurrealDB** (persistent database)
+- **Unicity Orchestrator** running the **MCP HTTP server** on port `3942`
+
+Example compose file:
+
+```yaml
+version: "3.9"
+
+services:
+  surrealdb:
+    image: surrealdb/surrealdb:latest
+    command: >
+      start
+      --log info
+      --user ${SURREALDB_USERNAME:-root}
+      --pass ${SURREALDB_PASSWORD:-root}
+      file:/data/surreal.db
+    ports:
+      - "8000:8000"
+    volumes:
+      - surreal-data:/data
+
+  orchestrator:
+    build: .
+    depends_on:
+      - surrealdb
+    environment:
+      - SURREALDB_URL=ws://surrealdb:8000
+      - SURREALDB_NAMESPACE=unicity
+      - SURREALDB_DATABASE=orchestrator
+      - SURREALDB_USERNAME=${SURREALDB_USERNAME:-root}
+      - SURREALDB_PASSWORD=${SURREALDB_PASSWORD:-root}
+      - MCP_BIND=0.0.0.0:3942
+      - RUST_LOG=info,unicity_orchestrator=info
+    ports:
+      - "3942:3942"
+    command: >
+      sh -c "unicity-orchestrator mcp-http
+             --bind ${MCP_BIND}
+             --db-url ${SURREALDB_URL}"
+
+volumes:
+  surreal-data:
+```
+
+Start the system with:
+
+```bash
+docker compose up --build
+```
+
+The MCP server will be accessible at:
+
+```
+http://localhost:3942/mcp
+```
+
+### Using the Dockerfile directly
+
+A multi-stage `Dockerfile` is included. To build manually:
+
+```bash
+docker build -t unicity-orchestrator .
+```
+
+Run with environment variables:
+
+```bash
+docker run --rm \
+  -e SURREALDB_URL=ws://host.docker.internal:8000 \
+  -e SURREALDB_NAMESPACE=unicity \
+  -e SURREALDB_DATABASE=orchestrator \
+  -e SURREALDB_USERNAME=root \
+  -e SURREALDB_PASSWORD=root \
+  -p 3942:3942 \
+  unicity-orchestrator
+```
+
+By default the container runs:
+
+```
+unicity-orchestrator mcp-http --bind 0.0.0.0:3942 --db-url $SURREALDB_URL
+```
+
+## Server Modes
+
+Unicity Orchestrator provides multiple server interfaces, each designed for different use cases:
+
+### Public REST API
+Runs on a public-facing port (default: `0.0.0.0:8080`) and exposes only **read‑only** endpoints:
+
+- `GET /health`
+- `POST /query` — semantic tool retrieval with user‑supplied context
+
+This API is safe to expose externally and is intended for user‑facing applications.
+
+### Admin REST API
+Runs on a restricted/admin port (default: `127.0.0.1:8081`) and exposes **mutating** endpoints:
+
+- `POST /sync` — sync all MCP registries
+- `POST /discover` — rediscover & index tools from configured MCP services
+
+These endpoints modify orchestrator state and should **not** be exposed publicly.  
+Use firewall rules, Docker port‑mapping, or private network bindings to restrict access.
+
+### MCP HTTP Server
+The orchestrator also runs a full **MCP‑compatible server** on its own port (default: `3942`).  
+This endpoint exposes the Model Context Protocol for agentic LLMs and MCP clients:
+
+```
+http://localhost:3942/mcp
+```
+
+This server is the primary interface for LLM‑based workflows and tool execution.
+
+### MCP Stdio Server
+For local development or integration with tools that expect an `stdio` MCP transport:
+
+```bash
+unicity-orchestrator mcp-stdio --db-url memory
+```
+
+When using SurrealDB instead of the in-memory database, you can provide full database configuration to the stdio server through environment variables or CLI flags. For example:
+
+```bash
+SURREALDB_URL=ws://localhost:8000 \
+SURREALDB_NAMESPACE=unicity \
+SURREALDB_DATABASE=orchestrator \
+SURREALDB_USERNAME=root \
+SURREALDB_PASSWORD=root \
+unicity-orchestrator mcp-stdio --db-url ws://localhost:8000
+```
+
+This mode is typically used with local MCP client tooling rather than production deployments.
+
+
 ## End-to-End Example
 
 This example demonstrates the full lifecycle of task orchestration — from a natural-language request to tool discovery, semantic matching, planning, and execution. It shows how Unicity Orchestrator handles tasks **without requiring the LLM to know any tools**.
@@ -140,6 +284,23 @@ cargo build --release
 ```
 
 ### Configuration
+
+### MCP Configuration File (mcp.json)
+
+The orchestrator requires an `mcp.json` file that lists external MCP services to load.  
+When running inside Docker or directly from the binary, the orchestrator will attempt to locate this file in the working directory (`./mcp.json`).
+
+**Automatic Behavior:**
+
+- If an `mcp.json` is present in the project root during Docker build, it will be included in the image automatically.
+- If no `mcp.json` exists at runtime, the orchestrator will create a minimal default file:
+
+```json
+{ "mcpServers": {} }
+```
+
+This ensures the system always starts cleanly even without external MCP services configured.  
+You may add services to this file at any time and restart the orchestrator.
 
 Create a `mcp.json` file to configure your MCP services:
 
