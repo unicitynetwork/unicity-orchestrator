@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 use anyhow::Result;
+use std::sync::Arc;
 use tracing::{info, Level};
 use tracing_subscriber::EnvFilter;
 use unicity_orchestrator::{DatabaseConfig, UnicityOrchestrator};
@@ -43,15 +44,7 @@ enum Commands {
     /// Run as an MCP HTTP server (placeholder for rmcp HTTP/SSE transport)
     McpHttp {
         /// Bind address, e.g. 0.0.0.0:8081
-        #[arg(long, default_value = "0.0.0.0:8081")]
-        bind: String,
-        #[arg(long, default_value = "memory")]
-        db_url: String,
-    },
-    /// Run as an MCP SSE server (placeholder for rmcp SSE transport)
-    McpSse {
-        /// Bind address, e.g. 0.0.0.0:8082
-        #[arg(long, default_value = "0.0.0.0:8082")]
+        #[arg(long, default_value = "0.0.0.0:3942")]
         bind: String,
         #[arg(long, default_value = "memory")]
         db_url: String,
@@ -114,7 +107,7 @@ async fn main() -> Result<()> {
             println!("Discovered {} services and {} tools", count.0, count.1);
         }
         Commands::Query { query, context } => {
-            let mut orchestrator = UnicityOrchestrator::new(DatabaseConfig::default()).await?;
+            let orchestrator = UnicityOrchestrator::new(DatabaseConfig::default()).await?;
 
             let context_value = context
                 .map(|c| serde_json::from_str(&c).ok())
@@ -158,7 +151,10 @@ async fn main() -> Result<()> {
             service.waiting().await?;
         }
         Commands::McpHttp { bind, db_url } => {
-            info!("Starting MCP HTTP server (rmcp) on {} with db_url={}", bind, db_url);
+            info!(
+            "Starting MCP HTTP server (rmcp) on {} with db_url={}",
+            bind, db_url
+        );
 
             let db_config = DatabaseConfig {
                 url: db_url,
@@ -168,29 +164,10 @@ async fn main() -> Result<()> {
             let mut orchestrator = UnicityOrchestrator::new(db_config).await?;
             orchestrator.warmup().await?;
 
-            // TODO: Integrate rmcp's HTTP/SSE transport here. For now, this is a
-            // placeholder so the CLI surface is in place. See rmcp documentation
-            // for creating an HTTP/SSE transport and pass it to `orchestrator.serve(...)`.
-            eprintln!(
-                "McpHttp mode is not yet implemented. Please plug in rmcp's HTTP/SSE transport here."
-            );
-        }
-        Commands::McpSse { bind, db_url } => {
-            info!("Starting MCP SSE server (rmcp) on {} with db_url={}", bind, db_url);
+            let orchestrator = Arc::new(orchestrator);
 
-            let db_config = DatabaseConfig {
-                url: db_url,
-                ..Default::default()
-            };
-
-            let mut orchestrator = UnicityOrchestrator::new(db_config).await?;
-            orchestrator.warmup().await?;
-
-            // TODO: Integrate rmcp's SSE transport here. For now, this is a placeholder
-            // so the CLI surface is in place.
-            eprintln!(
-                "McpSse mode is not yet implemented. Please plug in rmcp's SSE transport here."
-            );
+            // NOTE: now calling into the `server` module:
+            unicity_orchestrator::server::start_mcp_http(orchestrator, &bind).await?;
         }
         Commands::Init { db_url } => {
             let db_config = DatabaseConfig {

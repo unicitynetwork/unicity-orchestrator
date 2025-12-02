@@ -10,6 +10,7 @@ pub mod core;
 pub mod api;
 pub mod utils;
 mod executor;
+pub mod server;
 
 // Re-export key types and functions
 pub use db::{DatabaseConfig, create_connection, ensure_schema, ToolRecord};
