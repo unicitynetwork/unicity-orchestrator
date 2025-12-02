@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 use anyhow::Result;
+use tokio::sync::Mutex;
 use std::sync::Arc;
 use tracing::{info, Level};
 use tracing_subscriber::EnvFilter;
@@ -23,6 +24,9 @@ enum Commands {
     Server {
         #[arg(short, long, default_value = "8080")]
         port: u16,
+        /// Bind address for the admin API (internal / trusted only)
+        #[arg(long, default_value = "127.0.0.1:8081")]
+        admin_bind: String,
         #[arg(long, default_value = "memory")]
         db_url: String,
     },
@@ -70,26 +74,39 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Server { port, db_url } => {
+        Commands::Server { port, admin_bind, db_url } => {
             info!("Starting orchestrator server on port {}", port);
+            info!("Starting admin API on {}", admin_bind);
 
             let db_config = DatabaseConfig {
                 url: db_url,
                 ..Default::default()
             };
+            info!("Using database url for REST server: {}", db_config.url);
 
             let mut orchestrator = UnicityOrchestrator::new(db_config).await?;
             orchestrator.warmup().await?;
 
-            // Create and run the web server
-            let app = unicity_orchestrator::api::create_router(orchestrator);
+            // Shared orchestrator state for both public and admin routers.
+            let shared = Arc::new(Mutex::new(orchestrator));
 
-            let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
-            info!("Server listening on http://0.0.0.0:{}", port);
+            let public_app = unicity_orchestrator::api::create_public_router(shared.clone());
+            let admin_app = unicity_orchestrator::api::create_admin_router(shared.clone());
 
-            axum::serve(listener, app).await?;
+            let public_listener =
+                tokio::net::TcpListener::bind(format!("0.0.0.0:{}", port)).await?;
+            let admin_listener = tokio::net::TcpListener::bind(&admin_bind).await?;
+
+            info!("Public server listening on http://0.0.0.0:{}", port);
+            info!("Admin server listening on http://{}", admin_bind);
+
+            tokio::try_join!(
+                axum::serve(public_listener, public_app),
+                axum::serve(admin_listener, admin_app),
+            )?;
         }
         Commands::SyncRegistries => {
+            info!("Syncing MCP registries using default database configuration");
             let mut orchestrator = UnicityOrchestrator::new(DatabaseConfig::default()).await?;
             let result = orchestrator.sync_registries().await?;
 
@@ -102,11 +119,18 @@ async fn main() -> Result<()> {
             }
         }
         Commands::DiscoverTools => {
+            info!("Discovering tools using default database configuration");
             let mut orchestrator = UnicityOrchestrator::new(DatabaseConfig::default()).await?;
             let count = orchestrator.discover_tools().await?;
             println!("Discovered {} services and {} tools", count.0, count.1);
         }
         Commands::Query { query, context } => {
+            info!(
+                "Running query command. query='{}', context_present={}",
+                query,
+                context.is_some()
+            );
+
             let orchestrator = UnicityOrchestrator::new(DatabaseConfig::default()).await?;
 
             let context_value = context
@@ -135,6 +159,7 @@ async fn main() -> Result<()> {
                 url: db_url,
                 ..Default::default()
             };
+            info!("Using database url for MCP stdio server: {}", db_config.url);
 
             // Initialize orchestrator state and schema
             let mut orchestrator = UnicityOrchestrator::new(db_config).await?;
@@ -149,6 +174,7 @@ async fn main() -> Result<()> {
 
             // Block until the MCP session ends.
             service.waiting().await?;
+            info!("MCP stdio server session ended");
         }
         Commands::McpHttp { bind, db_url } => {
             info!(
@@ -160,6 +186,7 @@ async fn main() -> Result<()> {
                 url: db_url,
                 ..Default::default()
             };
+            info!("Using database url for MCP HTTP server: {}", db_config.url);
 
             let mut orchestrator = UnicityOrchestrator::new(db_config).await?;
             orchestrator.warmup().await?;
@@ -174,6 +201,7 @@ async fn main() -> Result<()> {
                 url: db_url,
                 ..Default::default()
             };
+            info!("Using database url for initialization: {}", db_config.url);
 
             info!("Initializing database...");
             let db = unicity_orchestrator::create_connection(db_config).await?;
