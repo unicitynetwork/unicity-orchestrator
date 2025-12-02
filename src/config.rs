@@ -102,9 +102,13 @@ pub fn resolve_mcp_json_path() -> anyhow::Result<PathBuf> {
         return Ok(candidate);
     }
 
-    Err(anyhow::anyhow!(
-        "Could not find mcp.json (set MCP_CONFIG or create ./mcp.json)"
-    ))
+    let default_path = PathBuf::from("mcp.json");
+    let default_contents = r#"{ "mcpServers": {} }"#;
+    if let Err(e) = fs::write(&default_path, default_contents) {
+        return Err(anyhow::anyhow!("Failed to create default mcp.json: {e}"));
+    }
+    tracing::info!("Created default mcp.json at {:?}", default_path);
+    Ok(default_path)
 }
 
 fn expand_env_vars(input: &str) -> String {

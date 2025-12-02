@@ -27,6 +27,18 @@ RUN apt-get update \
 
 WORKDIR /app
 
+# Bring entire build context root so we can pick up an mcp.json if present
+COPY . /tmp/root
+
+# If the user has an mcp.json at project root, copy it into the image.
+# If not present, this does nothing — the app will generate a default one at runtime.
+RUN if [ -f /tmp/root/mcp.json ]; then \
+      cp /tmp/root/mcp.json /app/mcp.json; \
+      echo "Using provided mcp.json from project root."; \
+    else \
+      echo "No mcp.json provided in project root; runtime will auto-generate one."; \
+    fi
+
 # Copy the built binary
 COPY --from=builder /app/target/release/unicity-orchestrator /usr/local/bin/unicity-orchestrator
 
