@@ -2,8 +2,7 @@ use serde::{Deserialize, Serialize};
 use surrealdb::{RecordId, sql::Datetime};
 use std::collections::HashMap;
 use rmcp::model::{Icon, JsonObject};
-use rmcp::schemars;
-use serde_json::{from_value, Value};
+use serde_json::Value;
 
 /// Persisted representation of an MCP service in SurrealDB.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,8 +38,8 @@ pub struct ServiceCreate {
     pub title: Option<String>,
     /// Version string from the MCP manifest.
     pub version: String,
-    // /// Optional icons associated with this service.
-    // pub icons: Option<Vec<Icon>>, // TODO
+    /// Optional icons associated with this service.
+    pub icons: Option<Vec<Icon>>,
     /// Optional website URL for this service.
     pub website_url: Option<String>,
     /// How this service was discovered.

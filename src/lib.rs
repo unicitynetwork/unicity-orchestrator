@@ -9,7 +9,7 @@ pub mod server;
 // Re-export key types and functions
 pub use db::{DatabaseConfig, create_connection, ensure_schema, ToolRecord};
 pub use knowledge_graph::{KnowledgeGraph, EmbeddingManager};
-pub use config::{load_mcp_services, McpServiceConfig};
+pub use config::McpServiceConfig;
 use anyhow::Result;
 use crate::db::queries::QueryBuilder;
 use crate::db::schema::{ServiceCreate, CreateToolRecord, ServiceOrigin as DbServiceOrigin, TypedSchema};
@@ -31,6 +31,7 @@ use rmcp::{ServerHandler, model::{
 }, RoleServer};
 use rmcp::model::{CallToolRequestMethod, CallToolRequestParam, CallToolResult};
 use rmcp::service::RequestContext;
+use crate::config::McpConfigs;
 use crate::knowledge_graph::{SymbolicReasoner, ToolSelection};
 use crate::mcp_client::RunningService;
 
@@ -134,7 +135,7 @@ impl UnicityOrchestrator {
     // TODO, result should be stats about discovered services/tools
     pub async fn discover_tools(&mut self) -> Result<(usize, usize)> {
         // Start MCP services and discover tools
-        let services = load_mcp_services()?;
+        let services = McpConfigs::load()?;
         let mut discovered_servers = 0;
         let mut discovered_tools = 0;
 
@@ -150,7 +151,7 @@ impl UnicityOrchestrator {
                                     name: server_info.name.clone(),
                                     title: server_info.title.clone(),
                                     version: server_info.version.clone(),
-                                    // icons: server_info.icons.clone(),
+                                    icons: server_info.icons.clone(),
                                     website_url: server_info.website_url.clone(),
                                     origin: DbServiceOrigin::StaticConfig,
                                     registry_id: None,

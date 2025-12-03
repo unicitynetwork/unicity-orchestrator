@@ -27,9 +27,9 @@ impl QueryBuilder {
             .query(
                 r#"
                 CREATE service SET
-                    name = $display_name,
-                    title = $description,
-                    version = $origin,
+                    name = $name,
+                    title = $title,
+                    version = $version,
                     icons = $icons,
                     website_url = $website_url,
                     origin = $origin,
@@ -38,10 +38,10 @@ impl QueryBuilder {
                     updated_at = time::now()
                 "#,
             )
-            .bind(("display_name", data.name.clone()))
+            .bind(("name", data.name.clone()))
             .bind(("title", data.title.clone()))
             .bind(("version", data.version.clone()))
-            // .bind(("icons", data.icons.clone()))
+            .bind(("icons", data.icons.clone()))
             .bind(("website_url", data.website_url.clone()))
             .bind(("origin", data.origin.clone()))
             .bind(("registry_id", data.registry_id.clone()))
@@ -164,6 +164,60 @@ impl QueryBuilder {
         }
 
         Ok(results)
+    }
+
+    /// Find tools that could form a simple one-hop chain from a start tool
+    /// to some target output type.
+    ///
+    /// This is a very conservative implementation: it looks at the start
+    /// tool's output type and returns tools whose input and output types
+    /// match the desired flow. Full multi-hop planning is handled by the
+    /// symbolic planner / graph engine.
+    pub async fn find_tool_chain(
+        db: &Surreal<Any>,
+        start_tool: RecordId,
+        target_output_type: String,
+    ) -> Result<Vec<ToolRecord>> {
+        // Load the start tool to inspect its output type.
+        let mut res = db
+            .query("SELECT * FROM tool WHERE id = $id")
+            .bind(("id", start_tool.clone()))
+            .await?;
+
+        let start: Option<ToolRecord> = res.take(0)?;
+        let start = match start {
+            Some(t) => t,
+            None => return Ok(Vec::new()),
+        };
+
+        let start_out_type = start
+            .output_ty
+            .as_ref()
+            .map(|t| t.schema_type.clone())
+            .unwrap_or_default();
+
+        if start_out_type.is_empty() {
+            // Without a known output type, we cannot construct a typed chain.
+            return Ok(Vec::new());
+        }
+
+        // Find tools whose input type matches the start tool's output type
+        // and whose output type matches the target type. This is a one-hop
+        // approximation; the symbolic planner can do multi-hop later.
+        let mut chain_res = db
+            .query(
+                r#"
+                SELECT * FROM tool
+                WHERE input_ty.type = $in_type
+                  AND output_ty.type = $target_type
+                "#,
+            )
+            .bind(("in_type", start_out_type))
+            .bind(("target_type", target_output_type))
+            .await?;
+
+        let tools: Vec<ToolRecord> = chain_res.take(0)?;
+        Ok(tools)
     }
 
     /// Get usage patterns for a given tool, based on the `tool_sequence` table.
@@ -326,5 +380,513 @@ impl QueryBuilder {
 
         let created: Option<ManifestRecord> = res.take(0)?;
         created.ok_or_else(|| anyhow!("failed to create manifest record"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::db::connection::create_connection;
+    use crate::db::connection::DatabaseConfig;
+    use serde_json::json;
+    use surrealdb::RecordId;
+    use crate::db::{CompatibilityType, CreateToolRecord, QueryBuilder, ServiceCreate, ServiceOrigin, ToolSearchQuery, TypedSchema};
+
+    #[tokio::test]
+    async fn test_upsert_service() {
+        // Create an in-memory database for testing
+        let config = DatabaseConfig {
+            url: "memory".to_string(),
+            namespace: "test".to_string(),
+            database: "test".to_string(),
+            username: None,
+            password: None,
+        };
+        let db = create_connection(config).await.unwrap();
+
+        // Create test data
+        let service_data = ServiceCreate {
+            name: "test_service".to_string(),
+            title: Some("Test Service".to_string()),
+            version: "1.0.0".to_string(),
+            icons: None,
+            website_url: Some("https://example.com".to_string()),
+            origin: ServiceOrigin::StaticConfig,
+            registry_id: None,
+        };
+
+        // Test upsert_service
+        let result = QueryBuilder::upsert_service(&db, &service_data).await;
+        assert!(result.is_ok(), "Failed to upsert service: {:?}", result.err());
+
+        let service = result.unwrap();
+        assert_eq!(service.name, Some("test_service".to_string()));
+        assert_eq!(service.title, Some("Test Service".to_string()));
+        assert_eq!(service.version, "1.0.0");
+        assert_eq!(service.website_url, Some("https://example.com".to_string()));
+        assert!(matches!(service.origin, ServiceOrigin::StaticConfig));
+        assert!(service.created_at.is_some());
+        assert!(service.updated_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_upsert_tool() {
+        let config = DatabaseConfig {
+            url: "memory".to_string(),
+            namespace: "test".to_string(),
+            database: "test".to_string(),
+            username: None,
+            password: None,
+        };
+        let db = create_connection(config).await.unwrap();
+
+        // First create a service to reference
+        let service_data = ServiceCreate {
+            name: "test_service".to_string(),
+            title: Some("Test Service".to_string()),
+            version: "1.0.0".to_string(),
+            icons: None,
+            website_url: None,
+            origin: ServiceOrigin::StaticConfig,
+            registry_id: None,
+        };
+        let service = QueryBuilder::upsert_service(&db, &service_data).await.unwrap();
+
+        // Create test tool data
+        let mut input_schema = serde_json::Map::new();
+        input_schema.insert("type".to_string(), json!("string"));
+
+        let mut output_schema = serde_json::Map::new();
+        output_schema.insert("type".to_string(), json!("object"));
+
+        let tool_data = CreateToolRecord {
+            service_id: service.id.clone(),
+            name: "test_tool".to_string(),
+            description: Some("A test tool".to_string()),
+            input_schema: input_schema.clone(),
+            output_schema: Some(output_schema.clone()),
+            embedding_id: None,
+            input_ty: Some(TypedSchema {
+                schema_type: "string".to_string(),
+                properties: None,
+                items: None,
+                required: None,
+                enum_values: None,
+            }),
+            output_ty: Some(TypedSchema {
+                schema_type: "object".to_string(),
+                properties: None,
+                items: None,
+                required: None,
+                enum_values: None,
+            }),
+        };
+
+        // Test upsert_tool
+        let result = QueryBuilder::upsert_tool(&db, &tool_data).await;
+        assert!(result.is_ok(), "Failed to upsert tool: {:?}", result.err());
+
+        let tool = result.unwrap();
+        assert_eq!(tool.name, "test_tool");
+        assert_eq!(tool.description, Some("A test tool".to_string()));
+        assert_eq!(tool.service_id, service.id);
+        assert_eq!(tool.usage_count, 0);
+        assert!(tool.created_at.is_some());
+        assert!(tool.updated_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_find_tool_by_id() {
+        let config = DatabaseConfig {
+            url: "memory".to_string(),
+            namespace: "test".to_string(),
+            database: "test".to_string(),
+            username: None,
+            password: None,
+        };
+        let db = create_connection(config).await.unwrap();
+
+        // Create a service and tool first
+        let service_data = ServiceCreate {
+            name: "test_service".to_string(),
+            title: None,
+            version: "1.0.0".to_string(),
+            icons: None,
+            website_url: None,
+            origin: ServiceOrigin::StaticConfig,
+            registry_id: None,
+        };
+        let service = QueryBuilder::upsert_service(&db, &service_data).await.unwrap();
+
+        let mut input_schema = serde_json::Map::new();
+        input_schema.insert("type".to_string(), json!("string"));
+
+        let tool_data = CreateToolRecord {
+            service_id: service.id.clone(),
+            name: "test_tool".to_string(),
+            description: None,
+            input_schema,
+            output_schema: None,
+            embedding_id: None,
+            input_ty: None,
+            output_ty: None,
+        };
+        let created_tool = QueryBuilder::upsert_tool(&db, &tool_data).await.unwrap();
+
+        // Test find_tool_by_id
+        let result = QueryBuilder::find_tool_by_id(&db, created_tool.id.clone()).await;
+        assert!(result.is_ok(), "Failed to find tool by id: {:?}", result.err());
+
+        let found_tool = result.unwrap();
+        assert!(found_tool.is_some(), "Tool should be found");
+        assert_eq!(found_tool.unwrap().id, created_tool.id);
+    }
+
+    #[tokio::test]
+    async fn test_find_tool_by_id_not_found() {
+        let config = DatabaseConfig {
+            url: "memory".to_string(),
+            namespace: "test".to_string(),
+            database: "test".to_string(),
+            username: None,
+            password: None,
+        };
+        let db = create_connection(config).await.unwrap();
+
+        // Test with non-existent ID
+        let fake_id = RecordId::from(("tool", "nonexistent"));
+        let result = QueryBuilder::find_tool_by_id(&db, fake_id).await;
+        assert!(result.is_ok());
+
+        let found_tool = result.unwrap();
+        assert!(found_tool.is_none(), "Non-existent tool should return None");
+    }
+
+    #[tokio::test]
+    async fn test_find_tools_by_embedding_empty_result() {
+        let config = DatabaseConfig {
+            url: "memory".to_string(),
+            namespace: "test".to_string(),
+            database: "test".to_string(),
+            username: None,
+            password: None,
+        };
+        let db = create_connection(config).await.unwrap();
+
+        // Test with empty database
+        let query_vector = vec![0.1, 0.2, 0.3];
+        let result = QueryBuilder::find_tools_by_embedding(&db, query_vector, 10, 0.5).await;
+        assert!(result.is_ok());
+
+        let tools = result.unwrap();
+        assert!(tools.is_empty(), "Should return empty result when no embeddings exist");
+    }
+
+    #[tokio::test]
+    async fn test_find_tool_chain_no_start_tool() {
+        let config = DatabaseConfig {
+            url: "memory".to_string(),
+            namespace: "test".to_string(),
+            database: "test".to_string(),
+            username: None,
+            password: None,
+        };
+        let db = create_connection(config).await.unwrap();
+
+        // Test with non-existent start tool
+        let fake_id = RecordId::from(("tool", "nonexistent"));
+        let result = QueryBuilder::find_tool_chain(&db, fake_id, "string".to_string()).await;
+        assert!(result.is_ok());
+
+        let tools = result.unwrap();
+        assert!(tools.is_empty(), "Should return empty result when start tool doesn't exist");
+    }
+
+    #[tokio::test]
+    async fn test_get_tool_usage_patterns() {
+        let config = DatabaseConfig {
+            url: "memory".to_string(),
+            namespace: "test".to_string(),
+            database: "test".to_string(),
+            username: None,
+            password: None,
+        };
+        let db = create_connection(config).await.unwrap();
+
+        // Test with empty database
+        let fake_id = RecordId::from(("tool", "nonexistent"));
+        let result = QueryBuilder::get_tool_usage_patterns(&db, &fake_id).await;
+        assert!(result.is_ok());
+
+        let patterns = result.unwrap();
+        assert!(patterns.is_empty(), "Should return empty result when no patterns exist");
+    }
+
+    #[tokio::test]
+    async fn test_search_tools_semantically() {
+        let config = DatabaseConfig {
+            url: "memory".to_string(),
+            namespace: "test".to_string(),
+            database: "test".to_string(),
+            username: None,
+            password: None,
+        };
+        let db = create_connection(config).await.unwrap();
+
+        let query = ToolSearchQuery {
+            text_query: Some("test".to_string()),
+            input_types: None,
+            output_types: None,
+            service_ids: None,
+            min_confidence: None,
+            include_embeddings: false,
+            limit: Some(10),
+            offset: None,
+        };
+
+        // Test search with empty database
+        let result = QueryBuilder::search_tools_semantically(&db, &query).await;
+        assert!(result.is_ok());
+
+        let search_result = result.unwrap();
+        assert_eq!(search_result.total_count, 0);
+        assert!(search_result.tools.is_empty());
+        assert!(search_result.embeddings.is_none());
+        assert_eq!(search_result.search_time_ms, 0);
+    }
+
+    #[tokio::test]
+    async fn test_update_tool_usage() {
+        let config = DatabaseConfig {
+            url: "memory".to_string(),
+            namespace: "test".to_string(),
+            database: "test".to_string(),
+            username: None,
+            password: None,
+        };
+        let db = create_connection(config).await.unwrap();
+
+        // Create a service and tool first
+        let service_data = ServiceCreate {
+            name: "test_service".to_string(),
+            title: None,
+            version: "1.0.0".to_string(),
+            icons: None,
+            website_url: None,
+            origin: ServiceOrigin::StaticConfig,
+            registry_id: None,
+        };
+        let service = QueryBuilder::upsert_service(&db, &service_data).await.unwrap();
+
+        let mut input_schema = serde_json::Map::new();
+        input_schema.insert("type".to_string(), json!("string"));
+
+        let tool_data = CreateToolRecord {
+            service_id: service.id.clone(),
+            name: "test_tool".to_string(),
+            description: None,
+            input_schema,
+            output_schema: None,
+            embedding_id: None,
+            input_ty: None,
+            output_ty: None,
+        };
+        let created_tool = QueryBuilder::upsert_tool(&db, &tool_data).await.unwrap();
+
+        // Test update_tool_usage
+        let result = QueryBuilder::update_tool_usage(&db, &created_tool.id, true).await;
+        assert!(result.is_ok(), "Failed to update tool usage: {:?}", result.err());
+
+        // Verify the usage count was incremented
+        let updated_tool = QueryBuilder::find_tool_by_id(&db, created_tool.id).await.unwrap().unwrap();
+        assert_eq!(updated_tool.usage_count, 1);
+    }
+
+    #[tokio::test]
+    async fn test_create_compatibility_edge() {
+        let config = DatabaseConfig {
+            url: "memory".to_string(),
+            namespace: "test".to_string(),
+            database: "test".to_string(),
+            username: None,
+            password: None,
+        };
+        let db = create_connection(config).await.unwrap();
+
+        // Create two tools
+        let service_data = ServiceCreate {
+            name: "test_service".to_string(),
+            title: None,
+            version: "1.0.0".to_string(),
+            icons: None,
+            website_url: None,
+            origin: ServiceOrigin::StaticConfig,
+            registry_id: None,
+        };
+        let service = QueryBuilder::upsert_service(&db, &service_data).await.unwrap();
+
+        let mut input_schema = serde_json::Map::new();
+        input_schema.insert("type".to_string(), json!("string"));
+
+        let tool1_data = CreateToolRecord {
+            service_id: service.id.clone(),
+            name: "tool1".to_string(),
+            description: None,
+            input_schema: input_schema.clone(),
+            output_schema: None,
+            embedding_id: None,
+            input_ty: None,
+            output_ty: None,
+        };
+        let tool1 = QueryBuilder::upsert_tool(&db, &tool1_data).await.unwrap();
+
+        let tool2_data = CreateToolRecord {
+            service_id: service.id.clone(),
+            name: "tool2".to_string(),
+            description: None,
+            input_schema,
+            output_schema: None,
+            embedding_id: None,
+            input_ty: None,
+            output_ty: None,
+        };
+        let tool2 = QueryBuilder::upsert_tool(&db, &tool2_data).await.unwrap();
+
+        // Test create_compatibility_edge
+        let result = QueryBuilder::create_compatibility_edge(
+            &db,
+            &tool1.id,
+            &tool2.id,
+            CompatibilityType::DataFlow,
+            0.9,
+            Some("Test compatibility".to_string()),
+        ).await;
+        assert!(result.is_ok(), "Failed to create compatibility edge: {:?}", result.err());
+
+        let compatibility = result.unwrap();
+        assert_eq!(compatibility.r#in, tool1.id);
+        assert_eq!(compatibility.out, tool2.id);
+        assert!(matches!(compatibility.compatibility_type, CompatibilityType::DataFlow));
+        assert_eq!(compatibility.confidence, 0.9);
+        assert_eq!(compatibility.reasoning, Some("Test compatibility".to_string()));
+        assert!(compatibility.created_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_get_registry_manifests_empty() {
+        let config = DatabaseConfig {
+            url: "memory".to_string(),
+            namespace: "test".to_string(),
+            database: "test".to_string(),
+            username: None,
+            password: None,
+        };
+        let db = create_connection(config).await.unwrap();
+
+        // Test with empty database
+        let fake_id = RecordId::from(("registry", "nonexistent"));
+        let result = QueryBuilder::get_registry_manifests(&db, &fake_id).await;
+        assert!(result.is_ok());
+
+        let manifests = result.unwrap();
+        assert!(manifests.is_empty(), "Should return empty result when no manifests exist");
+    }
+
+    #[tokio::test]
+    async fn test_sync_manifest_to_db() {
+        let config = DatabaseConfig {
+            url: "memory".to_string(),
+            namespace: "test".to_string(),
+            database: "test".to_string(),
+            username: None,
+            password: None,
+        };
+        let db = create_connection(config).await.unwrap();
+
+        let registry_id = RecordId::from(("registry", "test"));
+        let manifest_content = json!({
+            "name": "test_manifest",
+            "version": "1.0.0",
+            "description": "A test manifest"
+        });
+        let hash = "test_hash_123";
+
+        // Test sync_manifest_to_db
+        let result = QueryBuilder::sync_manifest_to_db(&db, &registry_id, &manifest_content, hash).await;
+        assert!(result.is_ok(), "Failed to sync manifest: {:?}", result.err());
+
+        let manifest = result.unwrap();
+        assert_eq!(manifest.registry_id, registry_id);
+        assert_eq!(manifest.name, "test_manifest");
+        assert_eq!(manifest.version, "1.0.0");
+        assert_eq!(manifest.content, manifest_content);
+        assert_eq!(manifest.hash, "test_hash_123");
+        assert!(manifest.is_active);
+        assert!(manifest.created_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_sync_manifest_to_db_with_minimal_content() {
+        let config = DatabaseConfig {
+            url: "memory".to_string(),
+            namespace: "test".to_string(),
+            database: "test".to_string(),
+            username: None,
+            password: None,
+        };
+        let db = create_connection(config).await.unwrap();
+
+        let registry_id = RecordId::from(("registry", "test"));
+        let manifest_content = json!({});
+        let hash = "minimal_hash";
+
+        // Test with minimal manifest content (no name or version)
+        let result = QueryBuilder::sync_manifest_to_db(&db, &registry_id, &manifest_content, hash).await;
+        assert!(result.is_ok(), "Failed to sync minimal manifest: {:?}", result.err());
+
+        let manifest = result.unwrap();
+        assert_eq!(manifest.name, "unknown");
+        assert_eq!(manifest.version, "0.0.0");
+        assert_eq!(manifest.hash, "minimal_hash");
+    }
+
+    #[tokio::test]
+    async fn test_service_origin_serialization() {
+        // Test that ServiceOrigin enum serializes correctly
+        let static_config = ServiceOrigin::StaticConfig;
+        let serialized = serde_json::to_string(&static_config).unwrap();
+        assert_eq!(serialized, "\"StaticConfig\"");
+
+        let registry = ServiceOrigin::Registry;
+        let serialized = serde_json::to_string(&registry).unwrap();
+        assert_eq!(serialized, "\"Registry\"");
+
+        let broadcast = ServiceOrigin::Broadcast;
+        let serialized = serde_json::to_string(&broadcast).unwrap();
+        assert_eq!(serialized, "\"Broadcast\"");
+    }
+
+    #[tokio::test]
+    async fn test_compatibility_type_serialization() {
+        // Test that CompatibilityType enum serializes correctly
+        let data_flow = CompatibilityType::DataFlow;
+        let serialized = serde_json::to_string(&data_flow).unwrap();
+        assert_eq!(serialized, "\"data_flow\"");
+
+        let semantic = CompatibilityType::SemanticSimilarity;
+        let serialized = serde_json::to_string(&semantic).unwrap();
+        assert_eq!(serialized, "\"semantic_similarity\"");
+    }
+
+    #[tokio::test]
+    async fn test_typed_schema_default_type() {
+        // Test the default_schema_type function
+        let schema = TypedSchema {
+            schema_type: "any".to_string(),
+            properties: None,
+            items: None,
+            required: None,
+            enum_values: None,
+        };
+        assert_eq!(schema.schema_type, "any");
     }
 }

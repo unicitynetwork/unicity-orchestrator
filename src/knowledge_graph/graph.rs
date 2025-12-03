@@ -22,6 +22,7 @@ pub struct GraphNode {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type")]
+#[derive(PartialEq)]
 pub enum NodeType {
     Service,
     Tool,
@@ -388,5 +389,824 @@ impl TypeSystem {
 
     pub fn add_compatibility_rule(&mut self, rule: CompatibilityRule) {
         self.compatibility_rules.push(rule);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+    use surrealdb::RecordId;
+
+    #[test]
+    fn test_knowledge_graph_new() {
+        let graph = KnowledgeGraph::new();
+        assert!(graph.nodes.is_empty());
+        assert!(graph.edges.is_empty());
+        assert!(graph.type_system.types.is_empty());
+        assert!(graph.type_system.compatibility_rules.is_empty());
+    }
+
+    #[test]
+    fn test_add_node() {
+        let mut graph = KnowledgeGraph::new();
+        let node_id = RecordId::from(("tool", "test_tool"));
+
+        let node = GraphNode {
+            id: node_id.clone(),
+            node_type: NodeType::Tool,
+            data: json!({"name": "test_tool"}),
+            embeddings: None,
+            metadata: HashMap::new(),
+        };
+
+        graph.add_node(node);
+        assert_eq!(graph.nodes.len(), 1);
+        assert!(graph.nodes.contains_key(&node_id));
+    }
+
+    #[test]
+    fn test_get_node() {
+        let mut graph = KnowledgeGraph::new();
+        let node_id = RecordId::from(("tool", "test_tool"));
+
+        let node = GraphNode {
+            id: node_id.clone(),
+            node_type: NodeType::Tool,
+            data: json!({"name": "test_tool"}),
+            embeddings: None,
+            metadata: HashMap::new(),
+        };
+
+        graph.add_node(node);
+
+        let retrieved = graph.get_node(&node_id);
+        assert!(retrieved.is_some());
+        assert_eq!(retrieved.unwrap().node_type, NodeType::Tool);
+
+        let non_existent = graph.get_node(&RecordId::from(("tool", "nonexistent")));
+        assert!(non_existent.is_none());
+    }
+
+    #[test]
+    fn test_add_edge() {
+        let mut graph = KnowledgeGraph::new();
+        let node1_id = RecordId::from(("tool", "tool1"));
+        let node2_id = RecordId::from(("tool", "tool2"));
+
+        // Add nodes first
+        graph.add_node(GraphNode {
+            id: node1_id.clone(),
+            node_type: NodeType::Tool,
+            data: json!({"name": "tool1"}),
+            embeddings: None,
+            metadata: HashMap::new(),
+        });
+
+        graph.add_node(GraphNode {
+            id: node2_id.clone(),
+            node_type: NodeType::Tool,
+            data: json!({"name": "tool2"}),
+            embeddings: None,
+            metadata: HashMap::new(),
+        });
+
+        let edge = GraphEdge {
+            id: RecordId::from(("edge", "test_edge")),
+            from: node1_id.clone(),
+            to: node2_id.clone(),
+            edge_type: EdgeType::DataFlow,
+            weight: 0.9,
+            metadata: HashMap::new(),
+        };
+
+        graph.add_edge(edge);
+        assert_eq!(graph.edges.len(), 1);
+    }
+
+    #[test]
+    fn test_add_edge_missing_nodes() {
+        let mut graph = KnowledgeGraph::new();
+        let node1_id = RecordId::from(("tool", "tool1"));
+        let node2_id = RecordId::from(("tool", "tool2"));
+
+        // Don't add nodes, just try to add edge
+        let edge = GraphEdge {
+            id: RecordId::from(("edge", "test_edge")),
+            from: node1_id,
+            to: node2_id,
+            edge_type: EdgeType::DataFlow,
+            weight: 0.9,
+            metadata: HashMap::new(),
+        };
+
+        graph.add_edge(edge);
+        assert_eq!(graph.edges.len(), 0); // Edge should not be added
+    }
+
+    #[test]
+    fn test_get_neighbors() {
+        let mut graph = KnowledgeGraph::new();
+        let node1_id = RecordId::from(("tool", "tool1"));
+        let node2_id = RecordId::from(("tool", "tool2"));
+        let node3_id = RecordId::from(("tool", "tool3"));
+
+        // Add nodes
+        for (id, name) in [(node1_id.clone(), "tool1"), (node2_id.clone(), "tool2"), (node3_id.clone(), "tool3")] {
+            graph.add_node(GraphNode {
+                id,
+                node_type: NodeType::Tool,
+                data: json!({"name": name}),
+                embeddings: None,
+                metadata: HashMap::new(),
+            });
+        }
+
+        // Add edges
+        graph.add_edge(GraphEdge {
+            id: RecordId::from(("edge", "edge1")),
+            from: node1_id.clone(),
+            to: node2_id.clone(),
+            edge_type: EdgeType::DataFlow,
+            weight: 0.9,
+            metadata: HashMap::new(),
+        });
+
+        graph.add_edge(GraphEdge {
+            id: RecordId::from(("edge", "edge2")),
+            from: node1_id.clone(),
+            to: node3_id.clone(),
+            edge_type: EdgeType::Sequential,
+            weight: 0.7,
+            metadata: HashMap::new(),
+        });
+
+        // Get all neighbors
+        let all_neighbors = graph.get_neighbors(&node1_id, None);
+        assert_eq!(all_neighbors.len(), 2);
+
+        // Get filtered neighbors
+        let dataflow_neighbors = graph.get_neighbors(&node1_id, Some(EdgeType::DataFlow));
+        assert_eq!(dataflow_neighbors.len(), 1);
+        assert_eq!(dataflow_neighbors[0].edge_type, EdgeType::DataFlow);
+    }
+
+    #[test]
+    fn test_neighbors_of() {
+        let mut graph = KnowledgeGraph::new();
+        let node1_id = RecordId::from(("tool", "tool1"));
+        let node2_id = RecordId::from(("tool", "tool2"));
+        let node3_id = RecordId::from(("tool", "tool3"));
+
+        // Add nodes
+        for (id, name) in [(node1_id.clone(), "tool1"), (node2_id.clone(), "tool2"), (node3_id.clone(), "tool3")] {
+            graph.add_node(GraphNode {
+                id,
+                node_type: NodeType::Tool,
+                data: json!({"name": name}),
+                embeddings: None,
+                metadata: HashMap::new(),
+            });
+        }
+
+        // Add edges of different types
+        graph.add_edge(GraphEdge {
+            id: RecordId::from(("edge", "edge1")),
+            from: node1_id.clone(),
+            to: node2_id.clone(),
+            edge_type: EdgeType::DataFlow,
+            weight: 0.9,
+            metadata: HashMap::new(),
+        });
+
+        graph.add_edge(GraphEdge {
+            id: RecordId::from(("edge", "edge2")),
+            from: node1_id.clone(),
+            to: node3_id.clone(),
+            edge_type: EdgeType::Sequential,
+            weight: 0.7,
+            metadata: HashMap::new(),
+        });
+
+        // Get neighbors of specific types
+        let dataflow_neighbors = graph.neighbors_of(&node1_id, &[EdgeType::DataFlow]);
+        assert_eq!(dataflow_neighbors.len(), 1);
+        assert_eq!(*dataflow_neighbors[0].0, node2_id);
+
+        let multiple_types = graph.neighbors_of(&node1_id, &[EdgeType::DataFlow, EdgeType::Sequential]);
+        assert_eq!(multiple_types.len(), 2);
+
+        let no_match = graph.neighbors_of(&node1_id, &[EdgeType::Parallel]);
+        assert_eq!(no_match.len(), 0);
+    }
+
+    #[test]
+    fn test_find_path_simple() {
+        let mut graph = KnowledgeGraph::new();
+        let node1_id = RecordId::from(("tool", "tool1"));
+        let node2_id = RecordId::from(("tool", "tool2"));
+
+        // Add nodes
+        for (id, name) in [(node1_id.clone(), "tool1"), (node2_id.clone(), "tool2")] {
+            graph.add_node(GraphNode {
+                id,
+                node_type: NodeType::Tool,
+                data: json!({"name": name}),
+                embeddings: None,
+                metadata: HashMap::new(),
+            });
+        }
+
+        // Add direct edge
+        graph.add_edge(GraphEdge {
+            id: RecordId::from(("edge", "edge1")),
+            from: node1_id.clone(),
+            to: node2_id.clone(),
+            edge_type: EdgeType::DataFlow,
+            weight: 0.9,
+            metadata: HashMap::new(),
+        });
+
+        let path = graph.find_path(&node1_id, &node2_id, 5, None);
+        assert!(path.is_some());
+        assert_eq!(path.unwrap().len(), 2); // [from, to]
+    }
+
+    #[test]
+    fn test_find_path_multi_hop() {
+        let mut graph = KnowledgeGraph::new();
+        let node1_id = RecordId::from(("tool", "tool1"));
+        let node2_id = RecordId::from(("tool", "tool2"));
+        let node3_id = RecordId::from(("tool", "tool3"));
+
+        // Add nodes
+        for (id, name) in [(node1_id.clone(), "tool1"), (node2_id.clone(), "tool2"), (node3_id.clone(), "tool3")] {
+            graph.add_node(GraphNode {
+                id,
+                node_type: NodeType::Tool,
+                data: json!({"name": name}),
+                embeddings: None,
+                metadata: HashMap::new(),
+            });
+        }
+
+        // Add path: tool1 -> tool2 -> tool3
+        graph.add_edge(GraphEdge {
+            id: RecordId::from(("edge", "edge1")),
+            from: node1_id.clone(),
+            to: node2_id.clone(),
+            edge_type: EdgeType::DataFlow,
+            weight: 0.9,
+            metadata: HashMap::new(),
+        });
+
+        graph.add_edge(GraphEdge {
+            id: RecordId::from(("edge", "edge2")),
+            from: node2_id.clone(),
+            to: node3_id.clone(),
+            edge_type: EdgeType::DataFlow,
+            weight: 0.9,
+            metadata: HashMap::new(),
+        });
+
+        let path = graph.find_path(&node1_id, &node3_id, 5, None);
+        assert!(path.is_some());
+        let path = path.unwrap();
+        assert_eq!(path.len(), 3); // [tool1, tool2, tool3]
+        assert_eq!(path[0], node1_id);
+        assert_eq!(path[1], node2_id);
+        assert_eq!(path[2], node3_id);
+    }
+
+    #[test]
+    fn test_find_path_no_path() {
+        let mut graph = KnowledgeGraph::new();
+        let node1_id = RecordId::from(("tool", "tool1"));
+        let node2_id = RecordId::from(("tool", "tool2"));
+
+        // Add nodes but no edges
+        for (id, name) in [(node1_id.clone(), "tool1"), (node2_id.clone(), "tool2")] {
+            graph.add_node(GraphNode {
+                id,
+                node_type: NodeType::Tool,
+                data: json!({"name": name}),
+                embeddings: None,
+                metadata: HashMap::new(),
+            });
+        }
+
+        let path = graph.find_path(&node1_id, &node2_id, 5, None);
+        assert!(path.is_none());
+    }
+
+    #[test]
+    fn test_find_path_max_depth() {
+        let mut graph = KnowledgeGraph::new();
+        let node1_id = RecordId::from(("tool", "tool1"));
+        let node2_id = RecordId::from(("tool", "tool2"));
+        let node3_id = RecordId::from(("tool", "tool3"));
+
+        // Add nodes
+        for (id, name) in [(node1_id.clone(), "tool1"), (node2_id.clone(), "tool2"), (node3_id.clone(), "tool3")] {
+            graph.add_node(GraphNode {
+                id,
+                node_type: NodeType::Tool,
+                data: json!({"name": name}),
+                embeddings: None,
+                metadata: HashMap::new(),
+            });
+        }
+
+        // Add path: tool1 -> tool2 -> tool3
+        graph.add_edge(GraphEdge {
+            id: RecordId::from(("edge", "edge1")),
+            from: node1_id.clone(),
+            to: node2_id.clone(),
+            edge_type: EdgeType::DataFlow,
+            weight: 0.9,
+            metadata: HashMap::new(),
+        });
+
+        graph.add_edge(GraphEdge {
+            id: RecordId::from(("edge", "edge2")),
+            from: node2_id.clone(),
+            to: node3_id.clone(),
+            edge_type: EdgeType::DataFlow,
+            weight: 0.9,
+            metadata: HashMap::new(),
+        });
+
+        // Max depth too small
+        let path = graph.find_path(&node1_id, &node3_id, 1, None);
+        assert!(path.is_none());
+
+        // Max depth sufficient
+        let path = graph.find_path(&node1_id, &node3_id, 3, None);
+        assert!(path.is_some());
+    }
+
+    #[test]
+    fn test_find_path_with_allowed_edges() {
+        let mut graph = KnowledgeGraph::new();
+        let node1_id = RecordId::from(("tool", "tool1"));
+        let node2_id = RecordId::from(("tool", "tool2"));
+
+        // Add nodes
+        for (id, name) in [(node1_id.clone(), "tool1"), (node2_id.clone(), "tool2")] {
+            graph.add_node(GraphNode {
+                id,
+                node_type: NodeType::Tool,
+                data: json!({"name": name}),
+                embeddings: None,
+                metadata: HashMap::new(),
+            });
+        }
+
+        // Add edge of type DataFlow
+        graph.add_edge(GraphEdge {
+            id: RecordId::from(("edge", "edge1")),
+            from: node1_id.clone(),
+            to: node2_id.clone(),
+            edge_type: EdgeType::DataFlow,
+            weight: 0.9,
+            metadata: HashMap::new(),
+        });
+
+        // Allow DataFlow edges
+        let path = graph.find_path(&node1_id, &node2_id, 5, Some(vec![EdgeType::DataFlow]));
+        assert!(path.is_some());
+
+        // Only allow Sequential edges (should not find path)
+        let path = graph.find_path(&node1_id, &node2_id, 5, Some(vec![EdgeType::Sequential]));
+        assert!(path.is_none());
+    }
+
+    #[test]
+    fn test_compute_similarity() {
+        let mut graph = KnowledgeGraph::new();
+        let node1_id = RecordId::from(("tool", "tool1"));
+        let node2_id = RecordId::from(("tool", "tool2"));
+        let node3_id = RecordId::from(("tool", "tool3"));
+
+        // Add nodes
+        for (id, name) in [(node1_id.clone(), "tool1"), (node2_id.clone(), "tool2"), (node3_id.clone(), "tool3")] {
+            graph.add_node(GraphNode {
+                id,
+                node_type: NodeType::Tool,
+                data: json!({"name": name}),
+                embeddings: None,
+                metadata: HashMap::new(),
+            });
+        }
+
+        // Add edge: tool1 -> tool2
+        graph.add_edge(GraphEdge {
+            id: RecordId::from(("edge", "edge1")),
+            from: node1_id.clone(),
+            to: node2_id.clone(),
+            edge_type: EdgeType::DataFlow,
+            weight: 0.9,
+            metadata: HashMap::new(),
+        });
+
+        // Direct connection should have similarity > 0
+        let similarity = graph.compute_similarity(&node1_id, &node2_id);
+        assert!(similarity.is_some());
+        assert!(similarity.unwrap() > 0.0);
+
+        // No connection should have no similarity
+        let no_similarity = graph.compute_similarity(&node1_id, &node3_id);
+        assert!(no_similarity.is_none());
+    }
+
+    #[test]
+    fn test_get_subgraph() {
+        let mut graph = KnowledgeGraph::new();
+        let node1_id = RecordId::from(("tool", "tool1"));
+        let node2_id = RecordId::from(("tool", "tool2"));
+        let node3_id = RecordId::from(("tool", "tool3"));
+
+        // Add nodes
+        for (id, name) in [(node1_id.clone(), "tool1"), (node2_id.clone(), "tool2"), (node3_id.clone(), "tool3")] {
+            graph.add_node(GraphNode {
+                id,
+                node_type: NodeType::Tool,
+                data: json!({"name": name}),
+                embeddings: None,
+                metadata: HashMap::new(),
+            });
+        }
+
+        // Add edges
+        graph.add_edge(GraphEdge {
+            id: RecordId::from(("edge", "edge1")),
+            from: node1_id.clone(),
+            to: node2_id.clone(),
+            edge_type: EdgeType::DataFlow,
+            weight: 0.9,
+            metadata: HashMap::new(),
+        });
+
+        graph.add_edge(GraphEdge {
+            id: RecordId::from(("edge", "edge2")),
+            from: node2_id.clone(),
+            to: node3_id.clone(),
+            edge_type: EdgeType::Sequential,
+            weight: 0.7,
+            metadata: HashMap::new(),
+        });
+
+        // Get subgraph with only tool1 and tool2
+        let subgraph = graph.get_subgraph(&[node1_id.clone(), node2_id.clone()]);
+
+        assert_eq!(subgraph.nodes.len(), 2);
+        assert!(subgraph.nodes.contains_key(&node1_id));
+        assert!(subgraph.nodes.contains_key(&node2_id));
+        assert!(!subgraph.nodes.contains_key(&node3_id));
+
+        // Should only include edge between tool1 and tool2
+        assert_eq!(subgraph.edges.len(), 1);
+        assert_eq!(subgraph.edges[0].from, node1_id);
+        assert_eq!(subgraph.edges[0].to, node2_id);
+    }
+
+    #[test]
+    fn test_edge_type_serialization() {
+        let edge_types = vec![
+            EdgeType::DataFlow,
+            EdgeType::SemanticSimilarity,
+            EdgeType::Sequential,
+            EdgeType::Parallel,
+            EdgeType::Conditional,
+            EdgeType::Transform,
+            EdgeType::BelongsTo,
+            EdgeType::TypeRelation,
+            EdgeType::ConceptRelation,
+        ];
+
+        for edge_type in edge_types {
+            let serialized = serde_json::to_string(&edge_type).unwrap();
+            let deserialized: EdgeType = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(edge_type, deserialized);
+        }
+    }
+
+    #[test]
+    fn test_node_type_serialization() {
+        let node_types = vec![
+            NodeType::Service,
+            NodeType::Tool,
+            NodeType::Type,
+            NodeType::Concept,
+            NodeType::Registry,
+        ];
+
+        for node_type in node_types {
+            let serialized = serde_json::to_string(&node_type).unwrap();
+            let deserialized: NodeType = serde_json::from_str(&serialized).unwrap();
+            assert_eq!(node_type, deserialized);
+        }
+    }
+
+    #[test]
+    fn test_type_system_new() {
+        let type_system = TypeSystem::new();
+        assert!(type_system.types.is_empty());
+        assert!(type_system.compatibility_rules.is_empty());
+    }
+
+    #[test]
+    fn test_type_system_add_type() {
+        let mut type_system = TypeSystem::new();
+
+        let type_info = TypeInfo {
+            name: "string".to_string(),
+            base_type: None,
+            properties: HashMap::new(),
+            enum_values: None,
+            is_array: false,
+            is_optional: false,
+        };
+
+        type_system.add_type(type_info);
+        assert_eq!(type_system.types.len(), 1);
+        assert!(type_system.types.contains_key("string"));
+    }
+
+    #[test]
+    fn test_type_system_is_compatible_direct_match() {
+        let mut type_system = TypeSystem::new();
+
+        let type_info = TypeInfo {
+            name: "string".to_string(),
+            base_type: None,
+            properties: HashMap::new(),
+            enum_values: None,
+            is_array: false,
+            is_optional: false,
+        };
+
+        type_system.add_type(type_info);
+
+        // Direct type match should return 1.0
+        let compatibility = type_system.is_compatible("string", "string");
+        assert_eq!(compatibility, Some(1.0));
+    }
+
+    #[test]
+    fn test_type_system_is_compatible_no_match() {
+        let type_system = TypeSystem::new();
+
+        // No types defined, should return None
+        let compatibility = type_system.is_compatible("string", "number");
+        assert_eq!(compatibility, None);
+    }
+
+    #[test]
+    fn test_type_system_compatibility_rules() {
+        let mut type_system = TypeSystem::new();
+
+        let rule = CompatibilityRule {
+            from_type: "string".to_string(),
+            to_type: "text".to_string(),
+            transformation: None,
+            confidence: 0.9,
+            description: "String to text conversion".to_string(),
+        };
+
+        type_system.add_compatibility_rule(rule);
+
+        let compatibility = type_system.is_compatible("string", "text");
+        assert_eq!(compatibility, Some(0.9));
+    }
+
+    #[test]
+    fn test_type_system_inheritance() {
+        let mut type_system = TypeSystem::new();
+
+        // Add base type
+        let base_type = TypeInfo {
+            name: "animal".to_string(),
+            base_type: None,
+            properties: HashMap::new(),
+            enum_values: None,
+            is_array: false,
+            is_optional: false,
+        };
+        type_system.add_type(base_type);
+
+        // Add derived type
+        let derived_type = TypeInfo {
+            name: "dog".to_string(),
+            base_type: Some("animal".to_string()),
+            properties: HashMap::new(),
+            enum_values: None,
+            is_array: false,
+            is_optional: false,
+        };
+        type_system.add_type(derived_type);
+
+        // Dog should be compatible with animal (inheritance)
+        let compatibility = type_system.is_compatible("dog", "animal");
+        assert_eq!(compatibility, Some(0.8));
+    }
+
+    #[test]
+    fn test_graph_node_with_embeddings() {
+        let node_id = RecordId::from(("tool", "test_tool"));
+        let embedding = EmbeddingInfo {
+            model: "test_model".to_string(),
+            vector: vec![0.1, 0.2, 0.3],
+            content_type: "text".to_string(),
+        };
+
+        let node = GraphNode {
+            id: node_id.clone(),
+            node_type: NodeType::Tool,
+            data: json!({"name": "test_tool"}),
+            embeddings: Some(vec![embedding]),
+            metadata: HashMap::new(),
+        };
+
+        assert!(node.embeddings.is_some());
+        let embeddings = node.embeddings.as_ref().unwrap();
+        assert_eq!(embeddings.len(), 1);
+        assert_eq!(embeddings[0].model, "test_model");
+    }
+
+    #[test]
+    fn test_graph_node_serialization() {
+        let node_id = RecordId::from(("tool", "test_tool"));
+        let node = GraphNode {
+            id: node_id.clone(),
+            node_type: NodeType::Tool,
+            data: json!({"name": "test_tool"}),
+            embeddings: None,
+            metadata: HashMap::new(),
+        };
+
+        let serialized = serde_json::to_string(&node).unwrap();
+        let deserialized: GraphNode = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(node.id, deserialized.id);
+        assert_eq!(node.node_type, deserialized.node_type);
+        assert_eq!(node.data, deserialized.data);
+    }
+
+    #[test]
+    fn test_graph_edge_serialization() {
+        let edge = GraphEdge {
+            id: RecordId::from(("edge", "test_edge")),
+            from: RecordId::from(("tool", "tool1")),
+            to: RecordId::from(("tool", "tool2")),
+            edge_type: EdgeType::DataFlow,
+            weight: 0.85,
+            metadata: HashMap::new(),
+        };
+
+        let serialized = serde_json::to_string(&edge).unwrap();
+        let deserialized: GraphEdge = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(edge.id, deserialized.id);
+        assert_eq!(edge.from, deserialized.from);
+        assert_eq!(edge.to, deserialized.to);
+        assert_eq!(edge.edge_type, deserialized.edge_type);
+        assert_eq!(edge.weight, deserialized.weight);
+    }
+
+    #[test]
+    fn test_type_info_serialization() {
+        let mut properties = HashMap::new();
+        properties.insert("length".to_string(), TypeProperty {
+            property_type: "number".to_string(),
+            required: true,
+            description: Some("Length of the string".to_string()),
+        });
+
+        let type_info = TypeInfo {
+            name: "string".to_string(),
+            base_type: Some("any".to_string()),
+            properties,
+            enum_values: Some(vec![json!("value1"), json!("value2")]),
+            is_array: false,
+            is_optional: true,
+        };
+
+        let serialized = serde_json::to_string(&type_info).unwrap();
+        let deserialized: TypeInfo = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(type_info.name, deserialized.name);
+        assert_eq!(type_info.base_type, deserialized.base_type);
+        assert_eq!(type_info.properties.len(), deserialized.properties.len());
+        assert_eq!(type_info.is_array, deserialized.is_array);
+        assert_eq!(type_info.is_optional, deserialized.is_optional);
+    }
+
+    #[test]
+    fn test_type_property_serialization() {
+        let property = TypeProperty {
+            property_type: "string".to_string(),
+            required: false,
+            description: Some("A string property".to_string()),
+        };
+
+        let serialized = serde_json::to_string(&property).unwrap();
+        let deserialized: TypeProperty = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(property.property_type, deserialized.property_type);
+        assert_eq!(property.required, deserialized.required);
+        assert_eq!(property.description, deserialized.description);
+    }
+
+    #[test]
+    fn test_embedding_info_serialization() {
+        let embedding = EmbeddingInfo {
+            model: "text-embedding-ada-002".to_string(),
+            vector: vec![0.1, 0.2, 0.3, 0.4],
+            content_type: "text".to_string(),
+        };
+
+        let serialized = serde_json::to_string(&embedding).unwrap();
+        let deserialized: EmbeddingInfo = serde_json::from_str(&serialized).unwrap();
+
+        assert_eq!(embedding.model, deserialized.model);
+        assert_eq!(embedding.vector, deserialized.vector);
+        assert_eq!(embedding.content_type, deserialized.content_type);
+    }
+
+    #[test]
+    fn test_find_path_with_cycles() {
+        let mut graph = KnowledgeGraph::new();
+        let node1_id = RecordId::from(("tool", "tool1"));
+        let node2_id = RecordId::from(("tool", "tool2"));
+        let node3_id = RecordId::from(("tool", "tool3"));
+
+        // Add nodes
+        for (id, name) in [(node1_id.clone(), "tool1"), (node2_id.clone(), "tool2"), (node3_id.clone(), "tool3")] {
+            graph.add_node(GraphNode {
+                id,
+                node_type: NodeType::Tool,
+                data: json!({"name": name}),
+                embeddings: None,
+                metadata: HashMap::new(),
+            });
+        }
+
+        // Create a longer path that will still be shorter than a cycle: tool1 -> tool2 -> tool3 -> tool4
+        let node4_id = RecordId::from(("tool", "tool4"));
+        graph.add_node(GraphNode {
+            id: node4_id.clone(),
+            node_type: NodeType::Tool,
+            data: json!({"name": "tool4"}),
+            embeddings: None,
+            metadata: HashMap::new(),
+        });
+
+        graph.add_edge(GraphEdge {
+            id: RecordId::from(("edge", "edge1")),
+            from: node1_id.clone(),
+            to: node2_id.clone(),
+            edge_type: EdgeType::DataFlow,
+            weight: 0.9,
+            metadata: HashMap::new(),
+        });
+
+        graph.add_edge(GraphEdge {
+            id: RecordId::from(("edge", "edge2")),
+            from: node2_id.clone(),
+            to: node3_id.clone(),
+            edge_type: EdgeType::DataFlow,
+            weight: 0.9,
+            metadata: HashMap::new(),
+        });
+
+        graph.add_edge(GraphEdge {
+            id: RecordId::from(("edge", "edge3")),
+            from: node3_id.clone(),
+            to: node4_id.clone(),
+            edge_type: EdgeType::DataFlow,
+            weight: 0.9,
+            metadata: HashMap::new(),
+        });
+
+        // Add a cycle edge that creates a loop back but shouldn't create a shorter path
+        graph.add_edge(GraphEdge {
+            id: RecordId::from(("edge", "cycle_edge")),
+            from: node4_id.clone(),
+            to: node1_id.clone(),
+            edge_type: EdgeType::DataFlow,
+            weight: 0.9,
+            metadata: HashMap::new(),
+        });
+
+        // Should still find direct path
+        let path = graph.find_path(&node1_id, &node2_id, 5, None);
+        assert!(path.is_some());
+        assert_eq!(path.unwrap().len(), 2);
+
+        // Should find path without infinite loop, taking the shortest route
+        let path = graph.find_path(&node1_id, &node3_id, 5, None);
+        assert!(path.is_some());
+        assert_eq!(path.unwrap().len(), 3); // tool1 -> tool2 -> tool3
     }
 }
