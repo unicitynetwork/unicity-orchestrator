@@ -3,8 +3,9 @@ name = "unicity-orchestrator"
 version = "0.1.0"
 edition = "2024"
 
-[workspace]
-resolver = "2"
+[[bin]]
+name = "unicity-orchestrator"
+path = "src/bin/main.rs"
 
 [dependencies]
 surrealdb = { version = "2.3.10", features = ["kv-mem"] }
@@ -14,24 +15,15 @@ serde_json = "1.0"
 anyhow = "1.0"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "chrono"] }
-fluent-uri = { version = "0.3.2", features = ["serde"] }
 embed_anything = "0.6.5"
-thiserror = "2.0.17"
-reqwest = "0.12.24"
-hnsw_rs = "0.3.2"
 clap = { version = "4.5", features = ["derive", "env"] }
-dotenv = "0.15"
 rmcp = { version = "0.9.1", features = ["server", "client", "transport-child-process", "transport-io", "schemars", "transport-streamable-http-client-reqwest", "transport-streamable-http-server"] }
 sha2 = "0.10"
-async-trait = "0.1"
 uuid = { version = "1.11", features = ["v4", "serde"] }
 axum = "0.8"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
-validator = { version = "0.18", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
-tempfile = "3.23.0"
 
-[[bin]]
-name = "unicity-orchestrator"
-path = "src/bin/main.rs"
+[dev-dependencies]
+tempfile = "3.23.0"

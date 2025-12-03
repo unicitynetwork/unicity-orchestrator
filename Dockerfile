@@ -1,14 +1,14 @@
 # === Builder stage ===
-FROM rust:1.82 as builder
+FROM rust:1.91 as builder
 
 WORKDIR /app
 
 # Copy manifest(s) first for better caching
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml ./
 # If you're in a workspace, copy the workspace-level Cargo.toml and relevant members.
 
 # Build deps with a dummy main to leverage cache
-RUN mkdir src && echo "fn main() {}" > src/main.rs
+RUN mkdir -p src/bin && echo "fn main() {}" > src/bin/main.rs
 RUN cargo build --release
 RUN rm -rf src
 

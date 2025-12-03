@@ -1,30 +1,25 @@
-version: "3.9"
-
 services:
   surrealdb:
     image: surrealdb/surrealdb:latest
-    command: >
-      start
-      --log info
-      --user ${SURREALDB_USERNAME:-root}
-      --pass ${SURREALDB_PASSWORD:-root}
-      file:/data/surreal.db
+    command: "start --allow-all"
     ports:
       - "8000:8000"
     environment:
       # These are for Surreal itself; orchestrator will use the same values.
       - SURREALDB_USERNAME=${SURREALDB_USERNAME:-root}
       - SURREALDB_PASSWORD=${SURREALDB_PASSWORD:-root}
+      - SURREAL_LOG=debug
     volumes:
       - surreal-data:/data
 
   orchestrator:
-    build: .
+    build:
+      context: .
     depends_on:
       - surrealdb
     environment:
       # Tell the orchestrator how to reach SurrealDB *inside* the compose network
-      - SURREALDB_URL=ws://surrealdb:8000
+      - SURREALDB_URL=ws://surrealdb:3943
       - SURREALDB_NAMESPACE=unicity
       - SURREALDB_DATABASE=orchestrator
       - SURREALDB_USERNAME=${SURREALDB_USERNAME:-root}
