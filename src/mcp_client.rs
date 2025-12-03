@@ -11,7 +11,6 @@ use rmcp::{
 };
 use rmcp::model::{CallToolRequestParam, Content, JsonObject};
 use rmcp::transport::StreamableHttpClientTransport;
-use surrealdb::RecordId;
 use tokio::process::Command;
 use tracing::{info, warn};
 
@@ -20,7 +19,6 @@ use tracing::{info, warn};
 /// This holds the SurrealDB id for the service as well as the rmcp `RunningService`
 /// handle used to talk MCP (initialize, list_tools, call_tool, etc.).
 pub struct RunningService {
-    pub service_id: RecordId,
     pub client: RmcpRunningService<RoleClient, ()>,
 }
 
@@ -55,8 +53,7 @@ pub async fn start_stdio_service(cfg: &McpServiceConfig) -> Result<Option<Runnin
 
         let client = ().serve(child).await?;
 
-        let service_id = RecordId::from(("service", id.clone()));
-        Ok(Some(RunningService { service_id, client }))
+        Ok(Some(RunningService { client }))
     } else {
         Ok(None)
     }
@@ -84,8 +81,7 @@ pub async fn start_http_service(cfg: &McpServiceConfig) -> Result<Option<Running
         // Keep the same client type as stdio: RmcpRunningService<RoleClient, ()>
         let client = ().serve(transport).await?;
 
-        let service_id = RecordId::from(("service", id.clone()));
-        Ok(Some(RunningService { service_id, client }))
+        Ok(Some(RunningService { client }))
     } else {
         Ok(None)
     }

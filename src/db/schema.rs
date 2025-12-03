@@ -304,15 +304,6 @@ pub struct EmbeddingRecord {
     pub created_at: Option<Datetime>,
 }
 
-/// Payload used when inserting a new embedding into the database.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EmbeddingCreate {
-    pub vector: Vec<f32>,
-    pub model: String,
-    pub content_type: String,
-    pub content_hash: String,
-}
-
 /// Typed, directional compatibility edge between two tools.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCompatibility {
@@ -404,7 +395,7 @@ pub struct ManifestRecord {
     pub registry_id: RecordId,
     pub name: String,
     pub version: String,
-    pub content: serde_json::Value,
+    pub content: Value,
     pub hash: String,
     pub is_active: bool,
     pub created_at: Option<Datetime>,
@@ -416,7 +407,7 @@ pub struct ManifestCreate {
     pub registry_id: RecordId,
     pub name: String,
     pub version: String,
-    pub content: serde_json::Value,
+    pub content: Value,
     pub hash: String,
     pub is_active: bool,
 }
@@ -450,8 +441,8 @@ pub struct ToolProposal {
     pub tool_id: RecordId,
     pub confidence: f32,
     pub reasoning: String,
-    pub input_requirements: Option<serde_json::Value>,
-    pub expected_output: Option<serde_json::Value>,
+    pub input_requirements: Option<Value>,
+    pub expected_output: Option<Value>,
     pub dependencies: Vec<RecordId>,
     pub estimated_cost: Option<f32>,
 }

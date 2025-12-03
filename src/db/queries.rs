@@ -166,60 +166,6 @@ impl QueryBuilder {
         Ok(results)
     }
 
-    /// Find tools that could form a simple one-hop chain from a start tool
-    /// to some target output type.
-    ///
-    /// This is a very conservative implementation: it looks at the start
-    /// tool's output type and returns tools whose input and output types
-    /// match the desired flow. Full multi-hop planning is handled by the
-    /// symbolic planner / graph engine.
-    pub async fn find_tool_chain(
-        db: &Surreal<Any>,
-        start_tool: RecordId,
-        target_output_type: String,
-    ) -> Result<Vec<ToolRecord>> {
-        // Load the start tool to inspect its output type.
-        let mut res = db
-            .query("SELECT * FROM tool WHERE id = $id")
-            .bind(("id", start_tool.clone()))
-            .await?;
-
-        let start: Option<ToolRecord> = res.take(0)?;
-        let start = match start {
-            Some(t) => t,
-            None => return Ok(Vec::new()),
-        };
-
-        let start_out_type = start
-            .output_ty
-            .as_ref()
-            .map(|t| t.schema_type.clone())
-            .unwrap_or_default();
-
-        if start_out_type.is_empty() {
-            // Without a known output type, we cannot construct a typed chain.
-            return Ok(Vec::new());
-        }
-
-        // Find tools whose input type matches the start tool's output type
-        // and whose output type matches the target type. This is a one-hop
-        // approximation; the symbolic planner can do multi-hop later.
-        let mut chain_res = db
-            .query(
-                r#"
-                SELECT * FROM tool
-                WHERE input_ty.type = $in_type
-                  AND output_ty.type = $target_type
-                "#,
-            )
-            .bind(("in_type", start_out_type))
-            .bind(("target_type", target_output_type))
-            .await?;
-
-        let tools: Vec<ToolRecord> = chain_res.take(0)?;
-        Ok(tools)
-    }
-
     /// Get usage patterns for a given tool, based on the `tool_sequence` table.
     pub async fn get_tool_usage_patterns(
         db: &Surreal<Any>,

@@ -33,7 +33,7 @@ pub fn create_public_router(state: AppState) -> Router {
 pub fn create_admin_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health_check))
-        .route("/sync", post(sync_registries))
+        // .route("/sync", post(sync_registries)) // TODO
         .route("/discover", post(discover_tools))
         .layer(
             ServiceBuilder::new()
@@ -79,31 +79,32 @@ async fn query_tools(
     })))
 }
 
-async fn sync_registries(
-    State(state): State<AppState>,
-) -> Result<Json<Value>, StatusCode> {
-    // Mutating operation: sync registry manifests from configured sources.
-    let mut orchestrator = state
-        .lock()
-        .await;
-
-    let result = orchestrator
-        .sync_registries()
-        .await
-        .map_err(|_e| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-    Ok(Json(serde_json::json!({
-        "status": "ok",
-        "total_manifests": result.total_manifests,
-        "new_manifests": result.new_manifests,
-        "updated_manifests": result.updated_manifests,
-        "errors": result
-            .errors
-            .iter()
-            .map(|e| (e.0.to_string(), e.1.to_string()))
-            .collect::<Vec<_>>(),
-    })))
-}
+// TODO
+// async fn sync_registries(
+//     State(state): State<AppState>,
+// ) -> Result<Json<Value>, StatusCode> {
+//     // Mutating operation: sync registry manifests from configured sources.
+//     let mut orchestrator = state
+//         .lock()
+//         .await;
+//
+//     let result = orchestrator
+//         .sync_registries()
+//         .await
+//         .map_err(|_e| StatusCode::INTERNAL_SERVER_ERROR)?;
+//
+//     Ok(Json(serde_json::json!({
+//         "status": "ok",
+//         "total_manifests": result.total_manifests,
+//         "new_manifests": result.new_manifests,
+//         "updated_manifests": result.updated_manifests,
+//         "errors": result
+//             .errors
+//             .iter()
+//             .map(|e| (e.0.to_string(), e.1.to_string()))
+//             .collect::<Vec<_>>(),
+//     })))
+// }
 
 async fn discover_tools(
     State(state): State<AppState>,

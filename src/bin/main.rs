@@ -30,8 +30,9 @@ enum Commands {
         #[arg(long, default_value = "memory")]
         db_url: String,
     },
-    /// Sync MCP registries
-    SyncRegistries,
+    // TODO
+    // /// Sync MCP registries
+    // SyncRegistries,
     /// Discover tools from configured MCP services
     DiscoverTools,
     /// Query for tools
@@ -105,19 +106,20 @@ async fn main() -> Result<()> {
                 axum::serve(admin_listener, admin_app),
             )?;
         }
-        Commands::SyncRegistries => {
-            info!("Syncing MCP registries using default database configuration");
-            let mut orchestrator = UnicityOrchestrator::new(DatabaseConfig::default()).await?;
-            let result = orchestrator.sync_registries().await?;
-
-            println!("Sync complete:");
-            println!("  Total manifests: {}", result.total_manifests);
-            println!("  New manifests: {}", result.new_manifests);
-            println!("  Updated manifests: {}", result.updated_manifests);
-            if !result.errors.is_empty() {
-                println!("  Errors: {}", result.errors.len());
-            }
-        }
+        // TODO
+        // Commands::SyncRegistries => {
+        //     info!("Syncing MCP registries using default database configuration");
+        //     let mut orchestrator = UnicityOrchestrator::new(DatabaseConfig::default()).await?;
+        //     let result = orchestrator.sync_registries().await?;
+        //
+        //     println!("Sync complete:");
+        //     println!("  Total manifests: {}", result.total_manifests);
+        //     println!("  New manifests: {}", result.new_manifests);
+        //     println!("  Updated manifests: {}", result.updated_manifests);
+        //     if !result.errors.is_empty() {
+        //         println!("  Errors: {}", result.errors.len());
+        //     }
+        // }
         Commands::DiscoverTools => {
             info!("Discovering tools using default database configuration");
             let mut orchestrator = UnicityOrchestrator::new(DatabaseConfig::default()).await?;

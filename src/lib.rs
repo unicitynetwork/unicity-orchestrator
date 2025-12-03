@@ -1,21 +1,14 @@
-pub mod model;
-pub mod config;
-pub mod mcp_client;
-
-// Core modules
-pub mod db;
+mod config;
+mod mcp_client;
+mod db;
 mod knowledge_graph;
-pub mod mcp;
-pub mod core;
 pub mod api;
-pub mod utils;
 mod executor;
 pub mod server;
 
 // Re-export key types and functions
 pub use db::{DatabaseConfig, create_connection, ensure_schema, ToolRecord};
 pub use knowledge_graph::{KnowledgeGraph, EmbeddingManager};
-pub use mcp::registry::{McpRegistryManager, RegistryConfig};
 pub use config::{load_mcp_services, McpServiceConfig};
 use anyhow::Result;
 use crate::db::queries::QueryBuilder;
@@ -52,7 +45,7 @@ pub struct UnicityOrchestrator {
     /// mutability for rule loading and inference without requiring `&mut self`
     /// on the orchestrator.
     symbolic_reasoner: Mutex<SymbolicReasoner>,
-    registry_manager: McpRegistryManager,
+    // registry_manager: McpRegistryManager, // TODO
     running_services: HashMap<surrealdb::RecordId, Arc<RunningService>>,
 }
 
@@ -84,14 +77,14 @@ impl UnicityOrchestrator {
             knowledge_graph::embedding::EmbeddingConfig::default(),
         ).await?;
         let symbolic_reasoner_inner = SymbolicReasoner::new(db.clone());
-        let registry_manager = McpRegistryManager::new(db.clone());
+        // let registry_manager = McpRegistryManager::new(db.clone()); // TODO
 
         Ok(Self {
             db,
             knowledge_graph,
             embedding_manager: Mutex::new(embedding_manager_inner),
             symbolic_reasoner: Mutex::new(symbolic_reasoner_inner),
-            registry_manager,
+            // registry_manager, // TODO
             running_services: HashMap::new(),
         })
     }
@@ -133,9 +126,10 @@ impl UnicityOrchestrator {
         Ok(())
     }
 
-    pub async fn sync_registries(&mut self) -> Result<mcp::registry::SyncResult> {
-        self.registry_manager.sync_all_registries().await
-    }
+    // TODO
+    // pub async fn sync_registries(&mut self) -> Result<mcp::registry::SyncResult> {
+    //     self.registry_manager.sync_all_registries().await
+    // }
 
     // TODO, result should be stats about discovered services/tools
     pub async fn discover_tools(&mut self) -> Result<(usize, usize)> {
