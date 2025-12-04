@@ -127,7 +127,6 @@ impl EmbeddingManager {
         }
 
         let combined_text = text_parts.join("\n");
-        println!("{}", combined_text);
         self.embed_text(&combined_text).await
     }
 

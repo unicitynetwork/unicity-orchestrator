@@ -18,15 +18,22 @@ pub struct DatabaseConfig {
 
 impl Default for DatabaseConfig {
     fn default() -> Self {
+        let url = env::var("SURREALDB_URL").unwrap_or_else(|_| "memory".to_string());
+        let mut username = env::var("SURREALDB_USERNAME").ok();
+        let mut password = env::var("SURREALDB_PASSWORD").ok();
+        if &url == "memory" {
+            username = None;
+            password = None;
+        }
+
         Self {
-            url: env::var("SURREALDB_URL")
-                .unwrap_or_else(|_| "memory".to_string()),
+            url,
             namespace: env::var("SURREALDB_NAMESPACE")
                 .unwrap_or_else(|_| "unicity".to_string()),
             database: env::var("SURREALDB_DATABASE")
                 .unwrap_or_else(|_| "orchestrator".to_string()),
-            username: env::var("SURREALDB_USERNAME").ok(),
-            password: env::var("SURREALDB_PASSWORD").ok(),
+            username,
+            password,
         }
     }
 }

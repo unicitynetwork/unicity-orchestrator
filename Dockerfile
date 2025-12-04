@@ -19,13 +19,24 @@ COPY src ./src
 RUN cargo build --release
 
 # === Runtime stage ===
-FROM debian:bookworm-slim
+FROM ubuntu:24.04
 
 RUN apt-get update \
- && apt-get install -y ca-certificates \
+ && apt-get install -y ca-certificates curl python3 python3-venv nodejs npm \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+
+# Install uv (which provides `uvx`)
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
+ && ln -s /root/.local/bin/uvx /usr/local/bin/uvx
+
+# Caches them in the image
+RUN uvx mcp-server-fetch --help || true \
+ && uvx kagimcp --help || true \
+ && uvx mcp-server-time --help || true
+
+RUN npm install -g npm@latest
 
 # Bring entire build context root so we can pick up an mcp.json if present
 COPY . /tmp/root
@@ -42,18 +53,9 @@ RUN if [ -f /tmp/root/mcp.json ]; then \
 # Copy the built binary
 COPY --from=builder /app/target/release/unicity-orchestrator /usr/local/bin/unicity-orchestrator
 
-# Defaults – can be overridden in docker-compose / kubernetes
+COPY entrypoint.sh /usr/local/bin/entrypoint.sh
+RUN chmod +x /usr/local/bin/entrypoint.sh
+
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
 ENV RUST_LOG=info,unicity_orchestrator=info
-
-# SurrealDB connection config
-ENV SURREALDB_URL=memory
-ENV SURREALDB_NAMESPACE=unicity
-ENV SURREALDB_DATABASE=orchestrator
-ENV SURREALDB_USERNAME=root
-ENV SURREALDB_PASSWORD=root
-
-# MCP HTTP bind address
-ENV MCP_BIND=0.0.0.0:3942
-
-# Default: run MCP HTTP server and point it at SURREALDB_URL
-CMD ["sh", "-c", "unicity-orchestrator mcp-http --bind ${MCP_BIND} --db-url ${SURREALDB_URL}"]

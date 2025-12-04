@@ -195,7 +195,6 @@ async fn main() -> Result<()> {
 
             let orchestrator = Arc::new(orchestrator);
 
-            // NOTE: now calling into the `server` module:
             unicity_orchestrator::server::start_mcp_http(orchestrator, &bind).await?;
         }
         Commands::Init { db_url } => {

@@ -59,36 +59,19 @@ Unicity Orchestrator can be run fully containerized together with SurrealDB.
 
 ### Using Docker Compose
 
-The repository includes a `docker-compose.yml` file that launches:
+The repository includes a `docker-compose.yml` file that launches the orchestrator in development mode:
 
-- **SurrealDB** (persistent database)
-- **Unicity Orchestrator** running the **MCP HTTP server** on port `3942`
-
-Example compose file:
+- **In‑Memory Mode (default)** — If no `SURREALDB_URL` is provided, the orchestrator automatically uses an in‑memory SurrealDB instance.
+- **External SurrealDB (optional)** — To connect to a real SurrealDB deployment, set `SURREALDB_URL` and related env variables.
 
 ```yaml
 version: "3.9"
 
 services:
-  surrealdb:
-    image: surrealdb/surrealdb:latest
-    command: >
-      start
-      --log info
-      --user ${SURREALDB_USERNAME:-root}
-      --pass ${SURREALDB_PASSWORD:-root}
-      file:/data/surreal.db
-    ports:
-      - "8000:8000"
-    volumes:
-      - surreal-data:/data
-
   orchestrator:
     build: .
-    depends_on:
-      - surrealdb
     environment:
-      - SURREALDB_URL=ws://surrealdb:8000
+      # Optional: If omitted, orchestrator runs with in‑memory DB for development
       - SURREALDB_NAMESPACE=unicity
       - SURREALDB_DATABASE=orchestrator
       - SURREALDB_USERNAME=${SURREALDB_USERNAME:-root}
@@ -97,19 +80,16 @@ services:
       - RUST_LOG=info,unicity_orchestrator=info
     ports:
       - "3942:3942"
-    command: >
-      sh -c "unicity-orchestrator mcp-http
-             --bind ${MCP_BIND}
-             --db-url ${SURREALDB_URL}"
-
-volumes:
-  surreal-data:
 ```
 
 Start the system with:
 
-```bash
+```
 docker compose up --build
+
+By default this runs with an in‑memory database. To point the orchestrator at a SurrealDB instance, set `SURREALDB_URL`:
+
+SURREALDB_URL=ws://localhost:8000/rpc docker compose up
 ```
 
 The MCP server will be accessible at:
@@ -139,11 +119,10 @@ docker run --rm \
   unicity-orchestrator
 ```
 
-By default the container runs:
+By default the container starts through an entrypoint that:
 
-```
-unicity-orchestrator mcp-http --bind 0.0.0.0:3942 --db-url $SURREALDB_URL
-```
+- Uses **in‑memory SurrealDB** if `SURREALDB_URL` is not set.
+- Validates required database variables when `SURREALDB_URL` *is* set.
 
 ## Server Modes
 

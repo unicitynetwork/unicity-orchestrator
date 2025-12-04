@@ -1,25 +1,10 @@
 services:
-  surrealdb:
-    image: surrealdb/surrealdb:latest
-    command: "start --allow-all"
-    ports:
-      - "8000:8000"
-    environment:
-      # These are for Surreal itself; orchestrator will use the same values.
-      - SURREALDB_USERNAME=${SURREALDB_USERNAME:-root}
-      - SURREALDB_PASSWORD=${SURREALDB_PASSWORD:-root}
-      - SURREAL_LOG=debug
-    volumes:
-      - surreal-data:/data
-
   orchestrator:
     build:
       context: .
-    depends_on:
-      - surrealdb
     environment:
       # Tell the orchestrator how to reach SurrealDB *inside* the compose network
-      - SURREALDB_URL=ws://surrealdb:3943
+      - SURREALDB_URL=memory
       - SURREALDB_NAMESPACE=unicity
       - SURREALDB_DATABASE=orchestrator
       - SURREALDB_USERNAME=${SURREALDB_USERNAME:-root}
@@ -33,10 +18,3 @@ services:
     ports:
       # Expose MCP HTTP to the host (for Inspector / client)
       - "3942:3942"
-    command: >
-      sh -c "unicity-orchestrator mcp-http
-             --bind ${MCP_BIND}
-             --db-url ${SURREALDB_URL}"
-
-volumes:
-  surreal-data:
