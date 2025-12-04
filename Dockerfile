@@ -36,8 +36,6 @@ RUN uvx mcp-server-fetch --help || true \
  && uvx kagimcp --help || true \
  && uvx mcp-server-time --help || true
 
-RUN npm install -g npm@latest
-
 # Bring entire build context root so we can pick up an mcp.json if present
 COPY . /tmp/root
 
