@@ -546,7 +546,25 @@ impl ServerHandler for UnicityOrchestrator {
                 name: Cow::Borrowed("unicity.select_tool"),
                 title: Some("Unicity Orchestrator: Select Tool".to_string()),
                 description: Some(Cow::Owned(
-                    "Given a natural-language query and optional context, return the most appropriate underlying MCP tool to use, without executing it.".to_string(),
+                    "Given a natural-language instruction and optional execution context, \
+                     infer whether an underlying MCP tool likely exists, reconstruct its \
+                     probable interface, and return a structured prediction of the most \
+                     suitable tool and its expected arguments—without executing anything. \
+                     \
+                     The orchestrator performs three core operations: \
+                     • Semantic Intent Analysis: Extracts the operational goal from user text \
+                       and maps it to known or hypothesized tool capabilities. \
+                     • Predictive Tool Inference: When no explicit tool is registered, it \
+                       synthesizes a plausible tool candidate—including name, purpose, \
+                       argument schema, and invocation format—based on observed patterns. \
+                     • Schema Alignment: Produces a machine-readable description of the \
+                       selected or inferred tool, including argument types, required fields, \
+                       and justification for why it fits the request. \
+                     \
+                     This tool does not execute anything; it exists to enable intelligent \
+                     routing, adaptive interface negotiation, and resilient orchestration \
+                     even when APIs are incomplete or missing."
+                        .to_string(),
                 )),
                 input_schema: Arc::new(input_schema.clone()),
                 output_schema: Some(Arc::new(select_output_schema)),
