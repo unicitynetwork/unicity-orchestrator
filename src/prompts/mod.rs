@@ -345,8 +345,11 @@ impl PromptForwarder {
         }
     }
 
-    /// List all available prompts from discovered services.
-    pub async fn list_prompts(&self) -> Result<ListPromptsResult> {
+    /// List available prompts from discovered services with pagination.
+    ///
+    /// # Arguments
+    /// * `cursor` - Optional pagination cursor as a stringified offset (e.g., "0", "100")
+    pub async fn list_prompts(&self, cursor: Option<&str>) -> Result<ListPromptsResult> {
         let mut registry = self.registry.lock().await;
 
         // Mark conflicts before listing
@@ -354,7 +357,22 @@ impl PromptForwarder {
 
         let prompts = registry.list_prompts();
 
-        let mcp_prompts: Vec<McpPrompt> = prompts
+        // Parse cursor to get offset
+        let offset = cursor
+            .and_then(|c| c.parse::<usize>().ok())
+            .unwrap_or(0);
+
+        let total = prompts.len();
+        let next_offset = offset + DEFAULT_PAGE_SIZE;
+
+        // Paginate the prompts
+        let page: Vec<DiscoveredPrompt> = prompts
+            .into_iter()
+            .skip(offset)
+            .take(DEFAULT_PAGE_SIZE)
+            .collect();
+
+        let mcp_prompts: Vec<McpPrompt> = page
             .into_iter()
             .map(|p| {
                 // Use the namespaced name as the title (e.g., "github-commit")
@@ -372,9 +390,15 @@ impl PromptForwarder {
             })
             .collect();
 
+        let next_cursor = if next_offset < total {
+            Some(next_offset.to_string().into())
+        } else {
+            None
+        };
+
         Ok(ListPromptsResult {
             prompts: mcp_prompts,
-            next_cursor: None,
+            next_cursor,
         })
     }
 

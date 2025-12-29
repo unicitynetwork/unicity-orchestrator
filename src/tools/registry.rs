@@ -12,6 +12,10 @@ use rmcp::service::RequestContext;
 use rmcp::RoleServer;
 use anyhow::Result;
 
+/// Pagination constants for tools.
+const DEFAULT_PAGE_SIZE: usize = 100;
+const MAX_PAGE_SIZE: usize = 1000;
+
 /// Context passed to tool handlers during execution.
 #[derive(Clone)]
 pub struct ToolContext {
@@ -104,11 +108,35 @@ impl ToolRegistry {
     }
 
     /// Get all registered tools as `McpTool` instances for `list_tools`.
-    pub fn list_tools(&self) -> Vec<McpTool> {
-        self.handlers
+    ///
+    /// # Arguments
+    /// * `cursor` - Optional pagination cursor as a stringified offset (e.g., "0", "100")
+    ///
+    /// Returns a tuple of (tools, next_cursor).
+    pub fn list_tools(&self, cursor: Option<&str>) -> (Vec<McpTool>, Option<String>) {
+        // Parse cursor to get offset
+        let offset = cursor
+            .and_then(|c| c.parse::<usize>().ok())
+            .unwrap_or(0);
+
+        let total = self.handlers.len();
+        let next_offset = offset + DEFAULT_PAGE_SIZE;
+
+        // Collect tools with pagination
+        let tools: Vec<McpTool> = self.handlers
             .values()
+            .skip(offset)
+            .take(DEFAULT_PAGE_SIZE)
             .map(|handler| handler.to_mcp_tool())
-            .collect()
+            .collect();
+
+        let next_cursor = if next_offset < total {
+            Some(next_offset.to_string())
+        } else {
+            None
+        };
+
+        (tools, next_cursor)
     }
 
     /// Execute a tool by name with the given arguments.
