@@ -36,6 +36,7 @@ This design ensures fast, predictable, and cost-efficient orchestration while ke
 - **Multi-Registry Support**: GitHub, npm, and custom MCP registries
 - **Tool Discovery**: Automatic discovery and indexing of MCP services
 - **Prompt Forwarding**: Aggregate prompts from all MCP services with intelligent conflict resolution
+- **Resource Forwarding**: Aggregate resources from all MCP services with automatic discovery
 - **Semantic Search**: Find tools by meaning, not just keywords
 - **Type-Safe Graph**: Enforced compatibility between tool inputs/outputs
 - **Symbolic Rules**: Define custom reasoning rules for tool selection
@@ -58,6 +59,15 @@ The orchestrator aggregates prompts from all configured MCP services and present
   - Service-prompt pattern: `github:commit` or `my-service:commit` (sanitized)
 - **Case-Insensitive Matching**: All resolution patterns work regardless of case
 - **Argument Validation**: Prompt names and arguments are validated to prevent injection attacks
+
+### Resource Forwarding
+The orchestrator aggregates resources from all configured MCP services and presents them through a unified interface:
+
+- **Automatic Discovery**: Resources are discovered during service initialization
+- **URI-Based Resolution**: Resources are accessed by their unique URI (e.g., `file:///path/to/file.txt`, `git://github.com/user/repo`)
+- **Conflict Resolution**: When multiple services define resources with the same URI, the first service's version is used
+- **Security Validation**: Resource URIs are validated to prevent path traversal and injection attacks
+- **Resource Templates**: Support for parameterized resource templates (e.g., `git://{repo}/file/{path}`)
 
 ### API & CLI
 - **REST API**: HTTP endpoints for all orchestration functions

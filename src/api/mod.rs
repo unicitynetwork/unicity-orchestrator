@@ -22,6 +22,7 @@ pub fn create_public_router(state: AppState) -> Router {
     Router::new()
         .route("/health", get(health_check))
         .route("/query", post(query_tools))
+        .route("/services", get(list_services))
         .layer(
             ServiceBuilder::new()
                 .layer(TraceLayer::new_for_http())
@@ -123,5 +124,32 @@ async fn discover_tools(
         "status": "ok",
         "services_discovered": services,
         "tools_discovered": tools,
+    })))
+}
+
+/// List all discovered MCP services.
+///
+/// This is a read-only endpoint that returns information about all services
+/// that have been discovered and registered in the orchestrator.
+async fn list_services(
+    State(state): State<AppState>,
+) -> Result<Json<Value>, StatusCode> {
+    // Read-only operation: query services from the database
+    let orchestrator = state.lock().await;
+    let db = orchestrator.db();
+
+    // Query all services from the database
+    let mut res = db
+        .query("SELECT * FROM service ORDER BY updated_at DESC")
+        .await
+        .map_err(|_e| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let services: Vec<crate::db::schema::ServiceRecord> = res
+        .take(0)
+        .map_err(|_e| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(Json(serde_json::json!({
+        "services": services,
+        "count": services.len(),
     })))
 }

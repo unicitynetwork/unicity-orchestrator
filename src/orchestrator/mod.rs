@@ -14,6 +14,7 @@ use crate::knowledge_graph::{KnowledgeGraph, EmbeddingManager, SymbolicReasoner,
 use crate::config::McpConfigs;
 use crate::mcp_client::RunningService;
 use crate::prompts::{PromptRegistry, PromptForwarder};
+use crate::resources::{ResourceRegistry, ResourceForwarder};
 use rmcp::model::JsonObject;
 use std::sync::Arc as StdArc;
 use tokio::sync::Mutex as TokioMutex;
@@ -43,6 +44,7 @@ pub struct Orchestrator {
     symbolic_reasoner: Mutex<SymbolicReasoner>,
     running_services: HashMap<RecordId, Arc<RunningService>>,
     prompt_forwarder: StdArc<PromptForwarder>,
+    resource_forwarder: StdArc<ResourceForwarder>,
 }
 
 impl Orchestrator {
@@ -68,6 +70,14 @@ impl Orchestrator {
             db.clone(),
         ));
 
+        // Initialize resource registry and forwarder
+        let resource_registry = StdArc::new(TokioMutex::new(ResourceRegistry::new()));
+        let resource_forwarder = StdArc::new(ResourceForwarder::new(
+            resource_registry,
+            running_services_arc.clone(),
+            db.clone(),
+        ));
+
         Ok(Self {
             db,
             knowledge_graph,
@@ -75,6 +85,7 @@ impl Orchestrator {
             symbolic_reasoner: Mutex::new(symbolic_reasoner_inner),
             running_services: HashMap::new(),
             prompt_forwarder,
+            resource_forwarder,
         })
     }
 
@@ -106,6 +117,9 @@ impl Orchestrator {
 
         // Discover prompts from all running services
         let _ = self.discover_prompts().await?;
+
+        // Discover resources from all running services
+        let _ = self.discover_resources().await?;
 
         Ok(())
     }
@@ -143,6 +157,12 @@ impl Orchestrator {
                             // Also add to prompt_forwarder's running_services map
                             {
                                 let mut services_map = self.prompt_forwarder.running_services.lock().await;
+                                services_map.insert(service_id.to_string(), rc.clone());
+                            }
+
+                            // Also add to resource_forwarder's running_services map
+                            {
+                                let mut services_map = self.resource_forwarder.running_services.lock().await;
                                 services_map.insert(service_id.to_string(), rc.clone());
                             }
 
@@ -434,6 +454,16 @@ impl Orchestrator {
     /// Discover prompts from all running services.
     pub async fn discover_prompts(&self) -> Result<usize> {
         self.prompt_forwarder.discover_prompts().await
+    }
+
+    /// Get reference to the resource forwarder.
+    pub fn resource_forwarder(&self) -> &StdArc<ResourceForwarder> {
+        &self.resource_forwarder
+    }
+
+    /// Discover resources from all running services.
+    pub async fn discover_resources(&self) -> Result<usize> {
+        self.resource_forwarder.discover_resources().await
     }
 
     /// Get running services as a String-keyed map for use by the prompt forwarder.

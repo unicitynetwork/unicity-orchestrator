@@ -10,6 +10,7 @@ mod executor;
 mod orchestrator;
 mod tools;
 mod prompts;
+mod resources;
 pub mod server;
 
 // Re-export key types and functions

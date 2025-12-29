@@ -19,6 +19,7 @@ use rmcp::transport::streamable_http_server::{
 
 use crate::tools::ToolRegistry;
 use crate::orchestrator::Orchestrator;
+use crate::resources::ResourceError;
 
 /// MCP server that handles protocol requests and delegates to tool handlers.
 #[derive(Clone)]
@@ -65,7 +66,8 @@ impl ServerHandler for McpServer {
             capabilities: ServerCapabilities::builder()
                 .enable_tools()
                 .enable_prompts()
-                // Note: We don't call enable_prompts_list_changed() since we don't emit notifications
+                .enable_resources()
+                // Note: We don't call enable_*_list_changed() since we don't emit notifications
                 .build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
@@ -78,12 +80,14 @@ impl ServerHandler for McpServer {
 
     fn list_tools(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        request: Option<PaginatedRequestParam>,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
-        let tools = self.tool_registry.list_tools();
+        let cursor = request.as_ref().and_then(|r| r.cursor.as_ref().map(|c| c.as_str()));
+        let (tools, next_cursor) = self.tool_registry.list_tools(cursor);
         let mut result = ListToolsResult::default();
         result.tools = tools;
+        result.next_cursor = next_cursor.map(|c| c.into());
         std::future::ready(Ok(result))
     }
 
@@ -166,13 +170,14 @@ impl ServerHandler for McpServer {
 
     fn list_prompts(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        request: Option<PaginatedRequestParam>,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ListPromptsResult, McpError>> + Send + '_ {
         let forwarder = self.orchestrator.prompt_forwarder().clone();
+        let cursor = request.as_ref().and_then(|r| r.cursor.as_ref().map(|c| c.to_string()));
 
         async move {
-            match forwarder.list_prompts().await {
+            match forwarder.list_prompts(cursor.as_deref()).await {
                 Ok(result) => Ok(result),
                 Err(e) => {
                     Err(McpError::internal_error(format!("Failed to list prompts: {}", e), None))
@@ -183,26 +188,69 @@ impl ServerHandler for McpServer {
 
     fn list_resources(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        request: Option<PaginatedRequestParam>,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ListResourcesResult, McpError>> + Send + '_ {
-        std::future::ready(Err(McpError::method_not_found::<ListResourcesRequestMethod>()))
+        let forwarder = self.orchestrator.resource_forwarder().clone();
+        let cursor = request.as_ref().and_then(|r| r.cursor.as_ref().map(|c| c.to_string()));
+
+        async move {
+            match forwarder.list_resources(None, cursor.as_deref()).await {
+                Ok(result) => Ok(result),
+                Err(e) => {
+                    Err(McpError::internal_error(format!("Failed to list resources: {}", e), None))
+                }
+            }
+        }
     }
 
     fn list_resource_templates(
         &self,
-        _request: Option<PaginatedRequestParam>,
+        request: Option<PaginatedRequestParam>,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ListResourceTemplatesResult, McpError>> + Send + '_ {
-        std::future::ready(Err(McpError::method_not_found::<ListResourceTemplatesRequestMethod>()))
+        let forwarder = self.orchestrator.resource_forwarder().clone();
+        let cursor = request.as_ref().and_then(|r| r.cursor.as_ref().map(|c| c.to_string()));
+
+        async move {
+            match forwarder.list_templates(None, cursor.as_deref()).await {
+                Ok(result) => Ok(result),
+                Err(e) => {
+                    Err(McpError::internal_error(format!("Failed to list resource templates: {}", e), None))
+                }
+            }
+        }
     }
 
     fn read_resource(
         &self,
-        _request: ReadResourceRequestParam,
+        request: ReadResourceRequestParam,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ReadResourceResult, McpError>> + Send + '_ {
-        std::future::ready(Err(McpError::method_not_found::<ReadResourceRequestMethod>()))
+        let forwarder = self.orchestrator.resource_forwarder().clone();
+        let uri = request.uri.to_string();
+
+        async move {
+            match forwarder.read_resource(&uri).await {
+                Ok(contents) => Ok(contents),
+                Err(ResourceError::NotFound(uri)) => {
+                    // -32002: Resource not found (custom error code per MCP spec)
+                    Err(McpError::new(
+                        rmcp::model::ErrorCode(-32002),
+                        format!("Resource not found: {}", uri),
+                        None,
+                    ))
+                }
+                Err(ResourceError::InvalidUri(uri)) => {
+                    // -32602: Invalid params (per MCP spec for invalid URI)
+                    Err(McpError::invalid_params(format!("Invalid URI: {}", uri), None))
+                }
+                Err(ResourceError::Internal(msg)) => {
+                    // -32603: Internal error
+                    Err(McpError::internal_error(format!("Failed to read resource: {}", msg), None))
+                }
+            }
+        }
     }
 
     fn subscribe(
@@ -257,10 +305,11 @@ impl ServerHandler for McpServer {
             capabilities: ServerCapabilities::builder()
                 .enable_tools()
                 .enable_prompts()
+                .enable_resources()
                 .build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
-                "Unicity orchestrator that discovers MCP services, builds a SurrealDB-backed knowledge graph, \
+                "Unicity orchestrator that discovers MCP services, builds a symbolic graph, \
                  and uses embeddings + symbolic reasoning to select and chain tools."
                     .to_string(),
             ),
