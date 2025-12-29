@@ -13,7 +13,10 @@ use crate::db::{DatabaseConfig, create_connection, ensure_schema, ToolRecord};
 use crate::knowledge_graph::{KnowledgeGraph, EmbeddingManager, SymbolicReasoner, ToolSelection};
 use crate::config::McpConfigs;
 use crate::mcp_client::RunningService;
+use crate::prompts::{PromptRegistry, PromptForwarder};
 use rmcp::model::JsonObject;
+use std::sync::Arc as StdArc;
+use tokio::sync::Mutex as TokioMutex;
 
 /// A single step in a proposed multi-tool plan.
 #[derive(Debug, Clone)]
@@ -39,6 +42,7 @@ pub struct Orchestrator {
     embedding_manager: Mutex<EmbeddingManager>,
     symbolic_reasoner: Mutex<SymbolicReasoner>,
     running_services: HashMap<RecordId, Arc<RunningService>>,
+    prompt_forwarder: StdArc<PromptForwarder>,
 }
 
 impl Orchestrator {
@@ -54,12 +58,23 @@ impl Orchestrator {
         ).await?;
         let symbolic_reasoner_inner = SymbolicReasoner::new(db.clone());
 
+        // Initialize prompt registry and forwarder
+        let prompt_registry = StdArc::new(TokioMutex::new(PromptRegistry::new()));
+        let running_services_arc: StdArc<TokioMutex<HashMap<String, StdArc<RunningService>>>> =
+            StdArc::new(TokioMutex::new(HashMap::new()));
+        let prompt_forwarder = StdArc::new(PromptForwarder::new(
+            prompt_registry,
+            running_services_arc.clone(),
+            db.clone(),
+        ));
+
         Ok(Self {
             db,
             knowledge_graph,
             embedding_manager: Mutex::new(embedding_manager_inner),
             symbolic_reasoner: Mutex::new(symbolic_reasoner_inner),
             running_services: HashMap::new(),
+            prompt_forwarder,
         })
     }
 
@@ -88,6 +103,9 @@ impl Orchestrator {
             let mut symbolic_reasoner = self.symbolic_reasoner.lock().await;
             symbolic_reasoner.load_rules().await?;
         }
+
+        // Discover prompts from all running services
+        let _ = self.discover_prompts().await?;
 
         Ok(())
     }
@@ -121,6 +139,12 @@ impl Orchestrator {
                             let rc = Arc::new(running_service);
                             self.running_services.insert(service_id.clone(), rc.clone());
                             discovered_servers += 1;
+
+                            // Also add to prompt_forwarder's running_services map
+                            {
+                                let mut services_map = self.prompt_forwarder.running_services.lock().await;
+                                services_map.insert(service_id.to_string(), rc.clone());
+                            }
 
                             for tool in tools {
                                 let input_schema = (*tool.input_schema).clone();
@@ -400,5 +424,26 @@ impl Orchestrator {
     /// Get reference to running services map.
     pub fn running_services(&self) -> &HashMap<RecordId, Arc<RunningService>> {
         &self.running_services
+    }
+
+    /// Get reference to the prompt forwarder.
+    pub fn prompt_forwarder(&self) -> &StdArc<PromptForwarder> {
+        &self.prompt_forwarder
+    }
+
+    /// Discover prompts from all running services.
+    pub async fn discover_prompts(&self) -> Result<usize> {
+        self.prompt_forwarder.discover_prompts().await
+    }
+
+    /// Get running services as a String-keyed map for use by the prompt forwarder.
+    pub async fn running_services_as_string_map(
+        &self,
+    ) -> HashMap<String, StdArc<RunningService>> {
+        let mut map = HashMap::new();
+        for (id, service) in &self.running_services {
+            map.insert(id.to_string(), service.clone());
+        }
+        map
     }
 }

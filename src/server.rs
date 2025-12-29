@@ -64,6 +64,8 @@ impl ServerHandler for McpServer {
             protocol_version: ProtocolVersion::V_2025_06_18,
             capabilities: ServerCapabilities::builder()
                 .enable_tools()
+                .enable_prompts()
+                // Note: We don't call enable_prompts_list_changed() since we don't emit notifications
                 .build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(
@@ -128,10 +130,38 @@ impl ServerHandler for McpServer {
 
     fn get_prompt(
         &self,
-        _request: GetPromptRequestParam,
+        request: GetPromptRequestParam,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<GetPromptResult, McpError>> + Send + '_ {
-        std::future::ready(Err(McpError::method_not_found::<GetPromptRequestMethod>()))
+        use crate::prompts::PromptError;
+
+        let forwarder = self.orchestrator.prompt_forwarder().clone();
+        let name = request.name.to_string();
+        let arguments = request.arguments.map(|a| {
+            a.into_iter().map(|(k, v)| (k.to_string(), v)).collect()
+        });
+
+        async move {
+            match forwarder.get_prompt(&name, arguments).await {
+                Ok(result) => Ok(result),
+                Err(PromptError::NotFound(name)) => {
+                    // -32602: Invalid params (per MCP spec for invalid prompt name)
+                    Err(McpError::invalid_params(format!("Prompt not found: {}", name), None))
+                }
+                Err(PromptError::InvalidName(name)) => {
+                    // -32602: Invalid params (per MCP spec for invalid prompt name)
+                    Err(McpError::invalid_params(format!("Invalid prompt name: {}", name), None))
+                }
+                Err(PromptError::InvalidArguments(msg)) => {
+                    // -32602: Invalid params (per MCP spec for missing required arguments)
+                    Err(McpError::invalid_params(format!("Invalid arguments: {}", msg), None))
+                }
+                Err(PromptError::Internal(msg)) => {
+                    // -32603: Internal error
+                    Err(McpError::internal_error(format!("Failed to get prompt: {}", msg), None))
+                }
+            }
+        }
     }
 
     fn list_prompts(
@@ -139,7 +169,16 @@ impl ServerHandler for McpServer {
         _request: Option<PaginatedRequestParam>,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ListPromptsResult, McpError>> + Send + '_ {
-        std::future::ready(Err(McpError::method_not_found::<ListPromptsRequestMethod>()))
+        let forwarder = self.orchestrator.prompt_forwarder().clone();
+
+        async move {
+            match forwarder.list_prompts().await {
+                Ok(result) => Ok(result),
+                Err(e) => {
+                    Err(McpError::internal_error(format!("Failed to list prompts: {}", e), None))
+                }
+            }
+        }
     }
 
     fn list_resources(
@@ -217,6 +256,7 @@ impl ServerHandler for McpServer {
             protocol_version: ProtocolVersion::V_2025_06_18,
             capabilities: ServerCapabilities::builder()
                 .enable_tools()
+                .enable_prompts()
                 .build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(

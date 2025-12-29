@@ -9,6 +9,7 @@ mod executor;
 // New modular structure
 mod orchestrator;
 mod tools;
+mod prompts;
 pub mod server;
 
 // Re-export key types and functions

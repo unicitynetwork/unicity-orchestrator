@@ -35,6 +35,7 @@ This design ensures fast, predictable, and cost-efficient orchestration while ke
 ### Core Capabilities
 - **Multi-Registry Support**: GitHub, npm, and custom MCP registries
 - **Tool Discovery**: Automatic discovery and indexing of MCP services
+- **Prompt Forwarding**: Aggregate prompts from all MCP services with intelligent conflict resolution
 - **Semantic Search**: Find tools by meaning, not just keywords
 - **Type-Safe Graph**: Enforced compatibility between tool inputs/outputs
 - **Symbolic Rules**: Define custom reasoning rules for tool selection
@@ -45,6 +46,18 @@ This design ensures fast, predictable, and cost-efficient orchestration while ke
 - **Graph Traversal**: Find optimal tool chains for data transformations
 - **Usage Patterns**: Learn from historical tool usage
 - **Alternative Suggestions**: Find equivalent tools for the same task
+
+### Prompt Forwarding
+The orchestrator aggregates prompts from all configured MCP services and presents them through a unified interface:
+
+- **Automatic Discovery**: Prompts are discovered during service initialization
+- **Conflict Resolution**: When multiple services define prompts with the same name, the orchestrator creates namespaced aliases (e.g., `github-commit`, `gitlab-commit`)
+- **Flexible Resolution**: Prompts can be accessed via:
+  - Namespaced names: `github-commit`
+  - Original prompt names: `commit` (resolves to the first match)
+  - Service-prompt pattern: `github:commit` or `my-service:commit` (sanitized)
+- **Case-Insensitive Matching**: All resolution patterns work regardless of case
+- **Argument Validation**: Prompt names and arguments are validated to prevent injection attacks
 
 ### API & CLI
 - **REST API**: HTTP endpoints for all orchestration functions
