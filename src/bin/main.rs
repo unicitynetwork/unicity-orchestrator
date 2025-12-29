@@ -4,7 +4,7 @@ use tokio::sync::Mutex;
 use std::sync::Arc;
 use tracing::{info, Level};
 use tracing_subscriber::EnvFilter;
-use unicity_orchestrator::{DatabaseConfig, UnicityOrchestrator};
+use unicity_orchestrator::{DatabaseConfig, Orchestrator, create_server};
 
 // rmcp imports for MCP stdio server mode
 use rmcp::service::ServiceExt;
@@ -30,9 +30,6 @@ enum Commands {
         #[arg(long, default_value = "memory")]
         db_url: String,
     },
-    // TODO
-    // /// Sync MCP registries
-    // SyncRegistries,
     /// Discover tools from configured MCP services
     DiscoverTools,
     /// Query for tools
@@ -46,7 +43,7 @@ enum Commands {
         #[arg(long, default_value = "memory")]
         db_url: String,
     },
-    /// Run as an MCP HTTP server (placeholder for rmcp HTTP/SSE transport)
+    /// Run as an MCP HTTP server
     McpHttp {
         /// Bind address, e.g. 0.0.0.0:8081
         #[arg(long, default_value = "0.0.0.0:3942")]
@@ -85,7 +82,7 @@ async fn main() -> Result<()> {
             };
             info!("Using database url for REST server: {}", db_config.url);
 
-            let mut orchestrator = UnicityOrchestrator::new(db_config).await?;
+            let mut orchestrator = Orchestrator::new(db_config).await?;
             orchestrator.warmup().await?;
 
             // Shared orchestrator state for both public and admin routers.
@@ -106,23 +103,9 @@ async fn main() -> Result<()> {
                 axum::serve(admin_listener, admin_app),
             )?;
         }
-        // TODO
-        // Commands::SyncRegistries => {
-        //     info!("Syncing MCP registries using default database configuration");
-        //     let mut orchestrator = UnicityOrchestrator::new(DatabaseConfig::default()).await?;
-        //     let result = orchestrator.sync_registries().await?;
-        //
-        //     println!("Sync complete:");
-        //     println!("  Total manifests: {}", result.total_manifests);
-        //     println!("  New manifests: {}", result.new_manifests);
-        //     println!("  Updated manifests: {}", result.updated_manifests);
-        //     if !result.errors.is_empty() {
-        //         println!("  Errors: {}", result.errors.len());
-        //     }
-        // }
         Commands::DiscoverTools => {
             info!("Discovering tools using default database configuration");
-            let mut orchestrator = UnicityOrchestrator::new(DatabaseConfig::default()).await?;
+            let mut orchestrator = Orchestrator::new(DatabaseConfig::default()).await?;
             let count = orchestrator.discover_tools().await?;
             println!("Discovered {} services and {} tools", count.0, count.1);
         }
@@ -133,7 +116,7 @@ async fn main() -> Result<()> {
                 context.is_some()
             );
 
-            let orchestrator = UnicityOrchestrator::new(DatabaseConfig::default()).await?;
+            let orchestrator = Orchestrator::new(DatabaseConfig::default()).await?;
 
             let context_value = context
                 .map(|c| serde_json::from_str(&c).ok())
@@ -163,13 +146,11 @@ async fn main() -> Result<()> {
             };
             info!("Using database url for MCP stdio server: {}", db_config.url);
 
-            // Initialize orchestrator state and schema
-            let mut orchestrator = UnicityOrchestrator::new(db_config).await?;
-            orchestrator.warmup().await?;
+            // Create the full server with tools
+            let server = create_server(db_config).await?;
 
-            // Run as an MCP stdio server. This assumes `UnicityOrchestrator`
-            // implements `ServerHandler` from rmcp.
-            let service = orchestrator
+            // Run as an MCP stdio server. McpServer implements ServerHandler.
+            let service = server.as_ref().clone()
                 .serve(stdio())
                 .await
                 .inspect_err(|e| tracing::error!("serving error: {:?}", e))?;
@@ -190,12 +171,9 @@ async fn main() -> Result<()> {
             };
             info!("Using database url for MCP HTTP server: {}", db_config.url);
 
-            let mut orchestrator = UnicityOrchestrator::new(db_config).await?;
-            orchestrator.warmup().await?;
+            let server = create_server(db_config).await?;
 
-            let orchestrator = Arc::new(orchestrator);
-
-            unicity_orchestrator::server::start_mcp_http(orchestrator, &bind).await?;
+            unicity_orchestrator::server::start_mcp_http(server, &bind).await?;
         }
         Commands::Init { db_url } => {
             let db_config = DatabaseConfig {

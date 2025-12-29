@@ -14,9 +14,9 @@ use tower::ServiceBuilder;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 
-use crate::UnicityOrchestrator;
+use crate::orchestrator::Orchestrator;
 
-pub type AppState = Arc<Mutex<UnicityOrchestrator>>;
+pub type AppState = Arc<Mutex<Orchestrator>>;
 
 pub fn create_public_router(state: AppState) -> Router {
     Router::new()

@@ -1,3 +1,7 @@
+//! MCP server implementation using rmcp.
+//!
+//! Provides HTTP-based MCP server functionality for the orchestrator.
+
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -13,107 +17,72 @@ use rmcp::transport::streamable_http_server::{
     session::local::LocalSessionManager,
 };
 
-use crate::UnicityOrchestrator;
+use crate::tools::ToolRegistry;
+use crate::orchestrator::Orchestrator;
 
-/// Wrapper around a shared `UnicityOrchestrator` so it can be used as an
-/// rmcp `Service<RoleServer>` via the `ServerHandler` blanket impl.
+/// MCP server that handles protocol requests and delegates to tool handlers.
 #[derive(Clone)]
-struct SharedOrchestrator {
-    inner: Arc<UnicityOrchestrator>,
+pub struct McpServer {
+    orchestrator: Arc<Orchestrator>,
+    tool_registry: Arc<ToolRegistry>,
 }
 
-impl SharedOrchestrator {
-    fn new(inner: Arc<UnicityOrchestrator>) -> Self {
-        Self { inner }
+impl McpServer {
+    /// Create a new MCP server with the given orchestrator and tool registry.
+    pub fn new(orchestrator: Arc<Orchestrator>, tool_registry: Arc<ToolRegistry>) -> Self {
+        Self {
+            orchestrator,
+            tool_registry,
+        }
+    }
+
+    /// Get the orchestrator.
+    pub fn orchestrator(&self) -> &Arc<Orchestrator> {
+        &self.orchestrator
+    }
+
+    /// Get the tool registry.
+    pub fn tool_registry(&self) -> &Arc<ToolRegistry> {
+        &self.tool_registry
     }
 }
 
-impl ServerHandler for SharedOrchestrator {
+impl ServerHandler for McpServer {
     fn ping(
         &self,
-        context: RequestContext<RoleServer>,
+        _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
-        self.inner.ping(context)
+        std::future::ready(Ok(()))
     }
 
     fn initialize(
         &self,
-        request: InitializeRequestParam,
-        context: RequestContext<RoleServer>,
+        _request: InitializeRequestParam,
+        _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<InitializeResult, McpError>> + Send + '_ {
-        self.inner.initialize(request, context)
+        std::future::ready(Ok(InitializeResult {
+            protocol_version: ProtocolVersion::V_2025_06_18,
+            capabilities: ServerCapabilities::builder()
+                .enable_tools()
+                .build(),
+            server_info: Implementation::from_build_env(),
+            instructions: Some(
+                "Unicity orchestrator that discovers MCP services, builds a SurrealDB-backed knowledge graph, \
+                 and uses embeddings + symbolic reasoning to select and chain tools."
+                    .to_string(),
+            ),
+        }))
     }
 
-    fn complete(
+    fn list_tools(
         &self,
-        request: CompleteRequestParam,
-        context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<CompleteResult, McpError>> + Send + '_ {
-        self.inner.complete(request, context)
-    }
-
-    fn set_level(
-        &self,
-        request: SetLevelRequestParam,
-        context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
-        self.inner.set_level(request, context)
-    }
-
-    fn get_prompt(
-        &self,
-        request: GetPromptRequestParam,
-        context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<GetPromptResult, McpError>> + Send + '_ {
-        self.inner.get_prompt(request, context)
-    }
-
-    fn list_prompts(
-        &self,
-        request: Option<PaginatedRequestParam>,
-        context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<ListPromptsResult, McpError>> + Send + '_ {
-        self.inner.list_prompts(request, context)
-    }
-
-    fn list_resources(
-        &self,
-        request: Option<PaginatedRequestParam>,
-        context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<ListResourcesResult, McpError>> + Send + '_ {
-        self.inner.list_resources(request, context)
-    }
-
-    fn list_resource_templates(
-        &self,
-        request: Option<PaginatedRequestParam>,
-        context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<ListResourceTemplatesResult, McpError>> + Send + '_ {
-        self.inner.list_resource_templates(request, context)
-    }
-
-    fn read_resource(
-        &self,
-        request: ReadResourceRequestParam,
-        context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<ReadResourceResult, McpError>> + Send + '_ {
-        self.inner.read_resource(request, context)
-    }
-
-    fn subscribe(
-        &self,
-        request: SubscribeRequestParam,
-        context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
-        self.inner.subscribe(request, context)
-    }
-
-    fn unsubscribe(
-        &self,
-        request: UnsubscribeRequestParam,
-        context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
-        self.inner.unsubscribe(request, context)
+        _request: Option<PaginatedRequestParam>,
+        _context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
+        let tools = self.tool_registry.list_tools();
+        let mut result = ListToolsResult::default();
+        result.tools = tools;
+        std::future::ready(Ok(result))
     }
 
     fn call_tool(
@@ -121,49 +90,141 @@ impl ServerHandler for SharedOrchestrator {
         request: CallToolRequestParam,
         context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
-        self.inner.call_tool(request, context)
+        let tool_name = request.name.to_string();
+        let args = request.arguments.unwrap_or_default();
+        let registry = self.tool_registry.clone();
+        let ctx = crate::tools::ToolContext {
+            request_context: context,
+        };
+
+        async move {
+            match registry.call_tool(&tool_name, args, &ctx).await {
+                Ok(result) => Ok(result),
+                Err(e) => {
+                    // Convert anyhow error to McpError
+                    Err(McpError::internal_error(format!("Tool execution failed: {}", e), None))
+                }
+            }
+        }
     }
 
-    fn list_tools(
+    // Default implementations for unsupported features
+
+    fn complete(
         &self,
-        request: Option<PaginatedRequestParam>,
-        context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
-        self.inner.list_tools(request, context)
+        _request: CompleteRequestParam,
+        _context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<CompleteResult, McpError>> + Send + '_ {
+        std::future::ready(Err(McpError::method_not_found::<CompleteRequestMethod>()))
+    }
+
+    fn set_level(
+        &self,
+        _request: SetLevelRequestParam,
+        _context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
+        std::future::ready(Err(McpError::method_not_found::<SetLevelRequestMethod>()))
+    }
+
+    fn get_prompt(
+        &self,
+        _request: GetPromptRequestParam,
+        _context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<GetPromptResult, McpError>> + Send + '_ {
+        std::future::ready(Err(McpError::method_not_found::<GetPromptRequestMethod>()))
+    }
+
+    fn list_prompts(
+        &self,
+        _request: Option<PaginatedRequestParam>,
+        _context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<ListPromptsResult, McpError>> + Send + '_ {
+        std::future::ready(Err(McpError::method_not_found::<ListPromptsRequestMethod>()))
+    }
+
+    fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParam>,
+        _context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<ListResourcesResult, McpError>> + Send + '_ {
+        std::future::ready(Err(McpError::method_not_found::<ListResourcesRequestMethod>()))
+    }
+
+    fn list_resource_templates(
+        &self,
+        _request: Option<PaginatedRequestParam>,
+        _context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<ListResourceTemplatesResult, McpError>> + Send + '_ {
+        std::future::ready(Err(McpError::method_not_found::<ListResourceTemplatesRequestMethod>()))
+    }
+
+    fn read_resource(
+        &self,
+        _request: ReadResourceRequestParam,
+        _context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<ReadResourceResult, McpError>> + Send + '_ {
+        std::future::ready(Err(McpError::method_not_found::<ReadResourceRequestMethod>()))
+    }
+
+    fn subscribe(
+        &self,
+        _request: SubscribeRequestParam,
+        _context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
+        std::future::ready(Err(McpError::method_not_found::<SubscribeRequestMethod>()))
+    }
+
+    fn unsubscribe(
+        &self,
+        _request: UnsubscribeRequestParam,
+        _context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
+        std::future::ready(Err(McpError::method_not_found::<UnsubscribeRequestMethod>()))
     }
 
     fn on_cancelled(
         &self,
-        notification: CancelledNotificationParam,
-        context: NotificationContext<RoleServer>,
+        _notification: CancelledNotificationParam,
+        _context: NotificationContext<RoleServer>,
     ) -> impl Future<Output = ()> + Send + '_ {
-        self.inner.on_cancelled(notification, context)
+        std::future::ready(())
     }
 
     fn on_progress(
         &self,
-        notification: ProgressNotificationParam,
-        context: NotificationContext<RoleServer>,
+        _notification: ProgressNotificationParam,
+        _context: NotificationContext<RoleServer>,
     ) -> impl Future<Output = ()> + Send + '_ {
-        self.inner.on_progress(notification, context)
+        std::future::ready(())
     }
 
     fn on_initialized(
         &self,
-        context: NotificationContext<RoleServer>,
+        _context: NotificationContext<RoleServer>,
     ) -> impl Future<Output = ()> + Send + '_ {
-        self.inner.on_initialized(context)
+        std::future::ready(())
     }
 
     fn on_roots_list_changed(
         &self,
-        context: NotificationContext<RoleServer>,
+        _context: NotificationContext<RoleServer>,
     ) -> impl Future<Output = ()> + Send + '_ {
-        self.inner.on_roots_list_changed(context)
+        std::future::ready(())
     }
 
     fn get_info(&self) -> ServerInfo {
-        self.inner.get_info()
+        ServerInfo {
+            protocol_version: ProtocolVersion::V_2025_06_18,
+            capabilities: ServerCapabilities::builder()
+                .enable_tools()
+                .build(),
+            server_info: Implementation::from_build_env(),
+            instructions: Some(
+                "Unicity orchestrator that discovers MCP services, builds a SurrealDB-backed knowledge graph, \
+                 and uses embeddings + symbolic reasoning to select and chain tools."
+                    .to_string(),
+            ),
+        }
     }
 }
 
@@ -172,17 +233,19 @@ impl ServerHandler for SharedOrchestrator {
 /// This exposes the MCP endpoint at `/mcp` on the given bind address,
 /// e.g. `127.0.0.1:3942` or `0.0.0.0:3942`.
 pub async fn start_mcp_http(
-    orchestrator: Arc<UnicityOrchestrator>,
+    server: Arc<McpServer>,
     bind: &str,
 ) -> Result<()> {
-    // Create a Streamable HTTP MCP service that reuses the same orchestrator
-    // instance across all sessions via `Arc`.
-    let handler = SharedOrchestrator::new(orchestrator.clone());
+    let orchestrator = server.orchestrator().clone();
+    let tool_registry = server.tool_registry().clone();
 
     let service = StreamableHttpService::new(
         {
-            let handler = handler.clone();
-            move || Ok(handler.clone())
+            let orchestrator = orchestrator.clone();
+            let tool_registry = tool_registry.clone();
+            move || {
+                Ok(McpServer::new(orchestrator.clone(), tool_registry.clone()))
+            }
         },
         LocalSessionManager::default().into(),
         Default::default(),
