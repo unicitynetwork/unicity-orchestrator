@@ -2,7 +2,9 @@
 //!
 //! Provides HTTP-based MCP server functionality for the orchestrator.
 
+use std::collections::HashSet;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 use anyhow::Result;
 use axum::Router;
@@ -10,7 +12,7 @@ use rmcp::{
     ErrorData as McpError,
     handler::server::ServerHandler,
     model::*,
-    service::{NotificationContext, RequestContext, RoleServer},
+    service::{NotificationContext, Peer, RequestContext, RoleServer},
 };
 use rmcp::transport::streamable_http_server::{
     StreamableHttpService,
@@ -26,6 +28,10 @@ use crate::resources::ResourceError;
 pub struct McpServer {
     orchestrator: Arc<Orchestrator>,
     tool_registry: Arc<ToolRegistry>,
+    /// Stored peer for sending notifications to the client.
+    peer: Arc<RwLock<Option<Peer<RoleServer>>>>,
+    /// Set of resource URIs that the client has subscribed to.
+    subscriptions: Arc<RwLock<HashSet<String>>>,
 }
 
 impl McpServer {
@@ -34,6 +40,8 @@ impl McpServer {
         Self {
             orchestrator,
             tool_registry,
+            peer: Arc::new(RwLock::new(None)),
+            subscriptions: Arc::new(RwLock::new(HashSet::new())),
         }
     }
 
@@ -45,6 +53,50 @@ impl McpServer {
     /// Get the tool registry.
     pub fn tool_registry(&self) -> &Arc<ToolRegistry> {
         &self.tool_registry
+    }
+
+    /// Send a resource list changed notification to the client.
+    pub async fn notify_resource_list_changed(&self) -> Result<(), anyhow::Error> {
+        if let Some(peer) = self.peer.read().await.as_ref() {
+            peer.notify_resource_list_changed()
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to send notification: {:?}", e))?;
+        }
+        Ok(())
+    }
+
+    /// Send a prompt list changed notification to the client.
+    pub async fn notify_prompt_list_changed(&self) -> Result<(), anyhow::Error> {
+        if let Some(peer) = self.peer.read().await.as_ref() {
+            peer.notify_prompt_list_changed()
+                .await
+                .map_err(|e| anyhow::anyhow!("Failed to send notification: {:?}", e))?;
+        }
+        Ok(())
+    }
+
+    /// Send a resource updated notification for a specific URI.
+    pub async fn notify_resource_updated(&self, uri: &str) -> Result<(), anyhow::Error> {
+        // Only notify if the client is subscribed to this resource
+        let subscriptions = self.subscriptions.read().await;
+        if !subscriptions.contains(uri) {
+            return Ok(());
+        }
+        drop(subscriptions);
+
+        if let Some(peer) = self.peer.read().await.as_ref() {
+            peer.notify_resource_updated(ResourceUpdatedNotificationParam {
+                uri: uri.to_string().into(),
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to send notification: {:?}", e))?;
+        }
+        Ok(())
+    }
+
+    /// Check if the client is subscribed to a specific resource.
+    pub async fn is_subscribed(&self, uri: &str) -> bool {
+        self.subscriptions.read().await.contains(uri)
     }
 }
 
@@ -58,24 +110,41 @@ impl ServerHandler for McpServer {
 
     fn initialize(
         &self,
-        _request: InitializeRequestParam,
-        _context: RequestContext<RoleServer>,
+        request: InitializeRequestParam,
+        context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<InitializeResult, McpError>> + Send + '_ {
-        std::future::ready(Ok(InitializeResult {
-            protocol_version: ProtocolVersion::V_2025_06_18,
-            capabilities: ServerCapabilities::builder()
-                .enable_tools()
-                .enable_prompts()
-                .enable_resources()
-                // Note: We don't call enable_*_list_changed() since we don't emit notifications
-                .build(),
-            server_info: Implementation::from_build_env(),
-            instructions: Some(
-                "Unicity orchestrator that discovers MCP services, builds a SurrealDB-backed knowledge graph, \
-                 and uses embeddings + symbolic reasoning to select and chain tools."
-                    .to_string(),
-            ),
-        }))
+        // Update client capabilities in elicitation coordinator
+        let capabilities = request.capabilities.clone();
+        let coordinator = self.orchestrator.elicitation_coordinator().clone();
+        let peer_storage = self.peer.clone();
+        let peer = context.peer.clone();
+
+        async move {
+            // Store the peer for sending notifications later
+            *peer_storage.write().await = Some(peer);
+
+            // Store client capabilities for elicitation
+            coordinator.set_client_capabilities(&capabilities).await;
+
+            Ok(InitializeResult {
+                protocol_version: ProtocolVersion::V_2025_06_18,
+                capabilities: ServerCapabilities::builder()
+                    .enable_tools()
+                    .enable_prompts()
+                    .enable_prompts_list_changed()
+                    .enable_resources()
+                    .enable_resources_subscribe()
+                    .enable_resources_list_changed()
+                    .build(),
+                server_info: Implementation::from_build_env(),
+                instructions: Some(
+                    "Unicity orchestrator that discovers MCP services, builds a SurrealDB-backed knowledge graph, \
+                     and uses embeddings + symbolic reasoning to select and chain tools.\n\n\
+                     This server supports MCP elicitation for tool approval and OAuth flows."
+                        .to_string(),
+                ),
+            })
+        }
     }
 
     fn list_tools(
@@ -255,18 +324,32 @@ impl ServerHandler for McpServer {
 
     fn subscribe(
         &self,
-        _request: SubscribeRequestParam,
+        request: SubscribeRequestParam,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
-        std::future::ready(Err(McpError::method_not_found::<SubscribeRequestMethod>()))
+        let subscriptions = self.subscriptions.clone();
+        let uri = request.uri.to_string();
+
+        async move {
+            // Add the URI to the set of subscribed resources
+            subscriptions.write().await.insert(uri);
+            Ok(())
+        }
     }
 
     fn unsubscribe(
         &self,
-        _request: UnsubscribeRequestParam,
+        request: UnsubscribeRequestParam,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
-        std::future::ready(Err(McpError::method_not_found::<UnsubscribeRequestMethod>()))
+        let subscriptions = self.subscriptions.clone();
+        let uri = request.uri.to_string();
+
+        async move {
+            // Remove the URI from the set of subscribed resources
+            subscriptions.write().await.remove(&uri);
+            Ok(())
+        }
     }
 
     fn on_cancelled(
@@ -305,7 +388,10 @@ impl ServerHandler for McpServer {
             capabilities: ServerCapabilities::builder()
                 .enable_tools()
                 .enable_prompts()
+                .enable_prompts_list_changed()
                 .enable_resources()
+                .enable_resources_subscribe()
+                .enable_resources_list_changed()
                 .build(),
             server_info: Implementation::from_build_env(),
             instructions: Some(

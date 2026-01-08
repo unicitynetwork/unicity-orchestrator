@@ -324,7 +324,6 @@ impl Default for PromptRegistry {
 
 /// Pagination constants for prompts.
 const DEFAULT_PAGE_SIZE: usize = 100;
-const MAX_PAGE_SIZE: usize = 1000;
 
 /// Handles prompt forwarding to discovered MCP services.
 pub struct PromptForwarder {
