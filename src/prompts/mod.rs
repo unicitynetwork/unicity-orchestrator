@@ -10,6 +10,7 @@ use tokio::sync::Mutex;
 use rmcp::model::{
     Prompt as McpPrompt, PromptArgument as McpPromptArgument,
     GetPromptResult, GetPromptRequestParam, ListPromptsResult, JsonObject,
+    Icon,
 };
 use anyhow::Result;
 
@@ -95,8 +96,10 @@ fn sanitize_name(name: &str) -> String {
 #[derive(Clone, Debug)]
 pub struct DiscoveredPrompt {
     pub name: String,
+    pub title: Option<String>,
     pub description: Option<String>,
     pub arguments: Option<Vec<McpPromptArgument>>,
+    pub icons: Option<Vec<Icon>>,
     pub service_id: String,
     pub service_name: String,  // Human-readable service name for display
 }
@@ -375,17 +378,16 @@ impl PromptForwarder {
         let mcp_prompts: Vec<McpPrompt> = page
             .into_iter()
             .map(|p| {
-                // Use the namespaced name as the title (e.g., "github-commit")
-                // The service name is already embedded in the namespaced name,
-                // and we don't want to duplicate the description.
-                let title = p.name.clone();
+                // Use original title if available, otherwise fall back to namespaced name
+                let title = p.title.unwrap_or_else(|| p.name.clone());
 
                 McpPrompt {
                     name: p.name.into(),
                     title: Some(title.into()),
                     description: p.description.map(Into::into),
                     arguments: p.arguments,
-                    icons: None,
+                    icons: p.icons,
+                    meta: None,
                 }
             })
             .collect();
@@ -397,6 +399,7 @@ impl PromptForwarder {
         };
 
         Ok(ListPromptsResult {
+            meta: None,
             prompts: mcp_prompts,
             next_cursor,
         })
@@ -505,17 +508,19 @@ impl PromptForwarder {
         for prompt in list_result.prompts {
             registry.register(DiscoveredPrompt {
                 name: prompt.name.to_string(),
+                title: prompt.title.map(|s| s.to_string()),
                 description: prompt.description.map(|s| s.to_string()),
                 arguments: prompt.arguments.map(|args| {
                     args.into_iter()
                         .map(|arg| McpPromptArgument {
                             name: arg.name.to_string(),
-                            title: None,
+                            title: arg.title.map(|s| s.to_string()),
                             description: arg.description.map(|s| s.to_string()),
                             required: arg.required,
                         })
                         .collect()
                 }),
+                icons: prompt.icons,
                 service_id: service_id.to_string(),
                 service_name: service_name.clone(),
             });
@@ -563,8 +568,10 @@ mod tests {
     fn mock_prompt(service_name: &str, name: &str, description: Option<&str>) -> DiscoveredPrompt {
         DiscoveredPrompt {
             name: name.to_string(),
+            title: None,
             description: description.map(|s| s.to_string()),
             arguments: None,
+            icons: None,
             service_id: format!("service:{}", service_name),
             service_name: service_name.to_string(),
         }
