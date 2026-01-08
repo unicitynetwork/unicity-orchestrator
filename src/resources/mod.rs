@@ -10,17 +10,14 @@ use tokio::sync::Mutex;
 use rmcp::model::{
     RawResource, ReadResourceRequestParam,
     ListResourcesResult, ReadResourceResult,
-    ListResourceTemplatesResult, ResourceTemplate, RawResourceTemplate,
-    AnnotateAble,
+    ListResourceTemplatesResult, RawResourceTemplate,
+    AnnotateAble, Annotations, Icon,
 };
 use anyhow::Result;
 use crate::db::Db;
 
 /// Default page size for paginated resource listings.
 const DEFAULT_PAGE_SIZE: usize = 100;
-
-/// Maximum page size to prevent abuse.
-const MAX_PAGE_SIZE: usize = 1000;
 
 /// Maximum URI length to prevent abuse.
 const MAX_URI_LENGTH: usize = 4096;
@@ -33,7 +30,9 @@ pub struct DiscoveredResource {
     pub title: Option<String>,
     pub description: Option<String>,
     pub mime_type: Option<String>,
-    pub annotations: Option<String>, // Stored as JSON string for simplicity
+    pub size: Option<u32>,
+    pub icons: Option<Vec<Icon>>,
+    pub annotations: Option<Annotations>,
     pub service_id: String,
     pub service_name: String,
 }
@@ -46,7 +45,7 @@ pub struct DiscoveredResourceTemplate {
     pub title: Option<String>,
     pub description: Option<String>,
     pub mime_type: Option<String>,
-    pub annotations: Option<String>, // Stored as JSON string for simplicity
+    pub annotations: Option<Annotations>,
     pub service_id: String,
     pub service_name: String,
 }
@@ -260,9 +259,10 @@ impl ResourceForwarder {
                     title: r.title,
                     description: Some(description_with_provenance),
                     mime_type: r.mime_type,
-                    size: None,
-                    icons: None,
-                }.no_annotation()
+                    size: r.size,
+                    icons: r.icons,
+                    meta: None,
+                }.optional_annotate(r.annotations)
             })
             .collect();
 
@@ -275,6 +275,7 @@ impl ResourceForwarder {
         };
 
         Ok(ListResourcesResult {
+            meta: None,
             resources: page,
             next_cursor,
         })
@@ -399,7 +400,7 @@ impl ResourceForwarder {
                     title: t.title,
                     description: Some(description_with_provenance),
                     mime_type: t.mime_type,
-                }.no_annotation()
+                }.optional_annotate(t.annotations)
             })
             .collect();
 
@@ -412,6 +413,7 @@ impl ResourceForwarder {
         };
 
         Ok(ListResourceTemplatesResult {
+            meta: None,
             resource_templates: page,
             next_cursor,
         })
@@ -464,13 +466,16 @@ impl ResourceForwarder {
         let mut count = 0;
 
         for resource in list_result.resources {
+            // resource is Annotated<RawResource>, deref gives RawResource fields
             registry.register(DiscoveredResource {
                 uri: resource.uri.clone(),
                 name: resource.name.clone(),
                 title: resource.title.clone(),
                 description: resource.description.clone(),
                 mime_type: resource.mime_type.clone(),
-                annotations: resource.annotations.map(|a| format!("{:?}", a)),
+                size: resource.size,
+                icons: resource.icons.clone(),
+                annotations: resource.annotations.clone(),
                 service_id: service_id.to_string(),
                 service_name: service_name.clone(),
             });
@@ -480,13 +485,14 @@ impl ResourceForwarder {
         // Also discover resource templates
         if let Ok(templates_result) = service.client.list_resource_templates(None).await {
             for template in templates_result.resource_templates {
+                // template is Annotated<RawResourceTemplate>
                 registry.register_template(DiscoveredResourceTemplate {
                     uri_template: template.uri_template.clone(),
                     name: template.name.clone(),
                     title: template.title.clone(),
                     description: template.description.clone(),
                     mime_type: template.mime_type.clone(),
-                    annotations: template.annotations.map(|a| format!("{:?}", a)),
+                    annotations: template.annotations.clone(),
                     service_id: service_id.to_string(),
                     service_name: service_name.clone(),
                 });
@@ -534,6 +540,8 @@ mod tests {
             title: Some(format!("{} Resource", name)),
             description: Some(format!("A test resource: {}", name)),
             mime_type: Some("text/plain".to_string()),
+            size: None,
+            icons: None,
             annotations: None,
             service_id: format!("service:{}", service_name),
             service_name: service_name.to_string(),
