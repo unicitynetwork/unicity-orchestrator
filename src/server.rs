@@ -98,6 +98,50 @@ impl McpServer {
     pub async fn is_subscribed(&self, uri: &str) -> bool {
         self.subscriptions.read().await.contains(uri)
     }
+
+    /// Rediscover resources from all MCP services and notify connected clients.
+    ///
+    /// This method:
+    /// 1. Clears existing resource registrations
+    /// 2. Discovers resources from all running services
+    /// 3. Sends a `notifications/resources/list_changed` notification to the client
+    pub async fn rediscover_resources(&self) -> Result<usize, anyhow::Error> {
+        let count = self.orchestrator.discover_resources().await?;
+
+        // Notify the client that the resource list has changed
+        if let Err(e) = self.notify_resource_list_changed().await {
+            tracing::warn!("Failed to send resource list changed notification: {}", e);
+        }
+
+        Ok(count)
+    }
+
+    /// Rediscover prompts from all MCP services and notify connected clients.
+    ///
+    /// This method:
+    /// 1. Clears existing prompt registrations
+    /// 2. Discovers prompts from all running services
+    /// 3. Sends a `notifications/prompts/list_changed` notification to the client
+    pub async fn rediscover_prompts(&self) -> Result<usize, anyhow::Error> {
+        let count = self.orchestrator.discover_prompts().await?;
+
+        // Notify the client that the prompt list has changed
+        if let Err(e) = self.notify_prompt_list_changed().await {
+            tracing::warn!("Failed to send prompt list changed notification: {}", e);
+        }
+
+        Ok(count)
+    }
+
+    /// Rediscover all resources and prompts, notifying clients of changes.
+    ///
+    /// This is a convenience method that calls both `rediscover_resources()`
+    /// and `rediscover_prompts()`.
+    pub async fn rediscover_all(&self) -> Result<(usize, usize), anyhow::Error> {
+        let resources = self.rediscover_resources().await?;
+        let prompts = self.rediscover_prompts().await?;
+        Ok((resources, prompts))
+    }
 }
 
 impl ServerHandler for McpServer {
