@@ -165,10 +165,13 @@ impl ServerHandler for McpServer {
 
         async move {
             // Store the peer for sending notifications later
-            *peer_storage.write().await = Some(peer);
+            *peer_storage.write().await = Some(peer.clone());
 
             // Store client capabilities for elicitation
             coordinator.set_client_capabilities(&capabilities).await;
+
+            // Store peer in coordinator for sending elicitation requests
+            coordinator.set_peer(peer).await;
 
             Ok(InitializeResult {
                 protocol_version: ProtocolVersion::V_2025_06_18,

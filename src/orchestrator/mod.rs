@@ -15,6 +15,7 @@ use crate::config::McpConfigs;
 use crate::mcp_client::RunningService;
 use crate::prompts::{PromptRegistry, PromptForwarder};
 use crate::resources::{ResourceRegistry, ResourceForwarder};
+use crate::elicitation::ElicitationCoordinator;
 use rmcp::model::JsonObject;
 use std::sync::Arc as StdArc;
 use tokio::sync::Mutex as TokioMutex;
@@ -45,6 +46,7 @@ pub struct Orchestrator {
     running_services: HashMap<RecordId, Arc<RunningService>>,
     prompt_forwarder: StdArc<PromptForwarder>,
     resource_forwarder: StdArc<ResourceForwarder>,
+    elicitation_coordinator: StdArc<ElicitationCoordinator>,
 }
 
 impl Orchestrator {
@@ -78,6 +80,9 @@ impl Orchestrator {
             db.clone(),
         ));
 
+        // Initialize elicitation coordinator
+        let elicitation_coordinator = StdArc::new(ElicitationCoordinator::new(db.clone())?);
+
         Ok(Self {
             db,
             knowledge_graph,
@@ -86,6 +91,7 @@ impl Orchestrator {
             running_services: HashMap::new(),
             prompt_forwarder,
             resource_forwarder,
+            elicitation_coordinator,
         })
     }
 
@@ -475,5 +481,10 @@ impl Orchestrator {
             map.insert(id.to_string(), service.clone());
         }
         map
+    }
+
+    /// Get reference to the elicitation coordinator.
+    pub fn elicitation_coordinator(&self) -> &StdArc<ElicitationCoordinator> {
+        &self.elicitation_coordinator
     }
 }

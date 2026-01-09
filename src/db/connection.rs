@@ -147,6 +147,17 @@ pub async fn ensure_schema(db: &Db) -> Result<()> {
          DEFINE FIELD priority ON TABLE symbolic_rule TYPE int;
          DEFINE FIELD is_active ON TABLE symbolic_rule TYPE bool DEFAULT true;
          DEFINE FIELD created_at ON TABLE symbolic_rule VALUE time::now();",
+
+        // Permission table for tool approval and elicitation
+        "DEFINE TABLE permission SCHEMAFULL;
+         DEFINE FIELD tool_id ON TABLE permission TYPE string;
+         DEFINE FIELD service_id ON TABLE permission TYPE string;
+         DEFINE FIELD user_id ON TABLE permission TYPE string;
+         DEFINE FIELD action ON TABLE permission TYPE string; -- allow_once, always_allow, deny
+         DEFINE FIELD created_at ON TABLE permission VALUE time::now();
+         DEFINE FIELD expires_at ON TABLE permission TYPE option<datetime>;
+         DEFINE INDEX permission_tool_user ON TABLE permission COLUMNS tool_id, user_id;
+         DEFINE INDEX permission_service_user ON TABLE permission COLUMNS service_id, user_id;",
     ];
 
     for query in schema_queries {

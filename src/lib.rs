@@ -11,6 +11,7 @@ mod orchestrator;
 mod tools;
 mod prompts;
 mod resources;
+mod elicitation;
 pub mod server;
 
 // Re-export key types and functions
