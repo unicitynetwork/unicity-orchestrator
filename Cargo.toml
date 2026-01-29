@@ -20,10 +20,15 @@ clap = { version = "4.5", features = ["derive", "env"] }
 rmcp = { version = "0.12.0", features = ["server", "client", "transport-child-process", "transport-io", "schemars", "transport-streamable-http-client-reqwest", "transport-streamable-http-server", "elicitation"] }
 sha2 = "0.10"
 uuid = { version = "1.11", features = ["v4", "serde"] }
+jsonwebtoken = "10.0.2"
+reqwest = { version = "0.13.1", features = ["json"] }
+base64 = "0.22"
 axum = "0.8"
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
+url = "2.5"
 chrono = { version = "0.4", features = ["serde"] }
+http = "1.4.0"
 
 [dev-dependencies]
 tempfile = "3.23.0"

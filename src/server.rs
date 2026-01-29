@@ -19,9 +19,13 @@ use rmcp::transport::streamable_http_server::{
     session::local::LocalSessionManager,
 };
 
+use crate::auth::{AuthConfig, AuthError, AuthExtractor, UserContext};
 use crate::tools::ToolRegistry;
 use crate::orchestrator::Orchestrator;
 use crate::resources::ResourceError;
+
+/// Type alias for HTTP request parts stored in rmcp extensions.
+type HttpParts = http::request::Parts;
 
 /// MCP server that handles protocol requests and delegates to tool handlers.
 #[derive(Clone)]
@@ -32,17 +36,68 @@ pub struct McpServer {
     peer: Arc<RwLock<Option<Peer<RoleServer>>>>,
     /// Set of resource URIs that the client has subscribed to.
     subscriptions: Arc<RwLock<HashSet<String>>>,
+    /// User context for multi-tenant isolation (None for anonymous/stdio mode).
+    /// Uses interior mutability so it can be set during initialize().
+    user_context: Arc<RwLock<Option<UserContext>>>,
+    /// Optional auth extractor for HTTP mode.
+    auth_extractor: Option<Arc<AuthExtractor>>,
 }
 
 impl McpServer {
     /// Create a new MCP server with the given orchestrator and tool registry.
+    ///
+    /// This creates a server in anonymous/stdio mode without auth extraction.
     pub fn new(orchestrator: Arc<Orchestrator>, tool_registry: Arc<ToolRegistry>) -> Self {
         Self {
             orchestrator,
             tool_registry,
             peer: Arc::new(RwLock::new(None)),
             subscriptions: Arc::new(RwLock::new(HashSet::new())),
+            user_context: Arc::new(RwLock::new(None)), // Anonymous/stdio mode
+            auth_extractor: None,
         }
+    }
+
+    /// Create a new MCP server with user context for multi-tenant isolation.
+    ///
+    /// This is used when the user context is already known (e.g., pre-extracted).
+    pub fn new_with_user(
+        orchestrator: Arc<Orchestrator>,
+        tool_registry: Arc<ToolRegistry>,
+        user_context: Option<UserContext>,
+    ) -> Self {
+        Self {
+            orchestrator,
+            tool_registry,
+            peer: Arc::new(RwLock::new(None)),
+            subscriptions: Arc::new(RwLock::new(HashSet::new())),
+            user_context: Arc::new(RwLock::new(user_context)),
+            auth_extractor: None,
+        }
+    }
+
+    /// Create a new MCP server with auth extractor for HTTP mode.
+    ///
+    /// The auth extractor will be called during initialize() to extract
+    /// user context from HTTP request headers.
+    pub fn new_with_auth(
+        orchestrator: Arc<Orchestrator>,
+        tool_registry: Arc<ToolRegistry>,
+        auth_extractor: Arc<AuthExtractor>,
+    ) -> Self {
+        Self {
+            orchestrator,
+            tool_registry,
+            peer: Arc::new(RwLock::new(None)),
+            subscriptions: Arc::new(RwLock::new(HashSet::new())),
+            user_context: Arc::new(RwLock::new(None)),
+            auth_extractor: Some(auth_extractor),
+        }
+    }
+
+    /// Get a clone of the current user context.
+    pub async fn user_context(&self) -> Option<UserContext> {
+        self.user_context.read().await.clone()
     }
 
     /// Get the orchestrator.
@@ -162,6 +217,12 @@ impl ServerHandler for McpServer {
         let coordinator = self.orchestrator.elicitation_coordinator().clone();
         let peer_storage = self.peer.clone();
         let peer = context.peer.clone();
+        let user_context_storage = self.user_context.clone();
+        let auth_extractor = self.auth_extractor.clone();
+
+        // Try to extract HTTP request parts from rmcp extensions for auth
+        // The rmcp library stores http::request::Parts in extensions when using HTTP transport
+        let extensions = context.extensions.clone();
 
         async move {
             // Store the peer for sending notifications later
@@ -172,6 +233,113 @@ impl ServerHandler for McpServer {
 
             // Store peer in coordinator for sending elicitation requests
             coordinator.set_peer(peer).await;
+
+            // Extract user context from HTTP headers if auth extractor is configured
+            if let Some(extractor) = auth_extractor {
+                // Try to get HTTP request parts from extensions
+                // rmcp stores http::request::Parts in extensions for HTTP transport
+                let (authorization, api_key, ip_address, user_agent) =
+                    if let Some(parts) = extensions.get::<HttpParts>() {
+                        let auth = parts.headers
+                            .get(http::header::AUTHORIZATION)
+                            .and_then(|v| v.to_str().ok())
+                            .map(|s| s.to_string());
+                        let api_key = parts.headers
+                            .get("X-API-Key")
+                            .and_then(|v| v.to_str().ok())
+                            .map(|s| s.to_string());
+                        let ip = parts.headers
+                            .get("X-Forwarded-For")
+                            .or_else(|| parts.headers.get("X-Real-IP"))
+                            .and_then(|v| v.to_str().ok())
+                            .map(|s| s.to_string());
+                        let ua = parts.headers
+                            .get(http::header::USER_AGENT)
+                            .and_then(|v| v.to_str().ok())
+                            .map(|s| s.to_string());
+                        (auth, api_key, ip, ua)
+                    } else {
+                        (None, None, None, None)
+                    };
+
+                match extractor.extract_user(
+                    authorization.as_deref(),
+                    api_key.as_deref(),
+                    ip_address,
+                    user_agent,
+                ).await {
+                    Ok(ctx) => {
+                        tracing::info!(
+                            user_id = %ctx.user_id_string(),
+                            provider = %ctx.provider().as_str(),
+                            "User authenticated for MCP session"
+                        );
+                        *user_context_storage.write().await = Some(ctx);
+                    }
+                    Err(AuthError::Unauthenticated) => {
+                        tracing::warn!("MCP session rejected: authentication required");
+                        return Err(McpError::new(
+                            ErrorCode(-32001),
+                            "Authentication required".to_string(),
+                            None,
+                        ));
+                    }
+                    Err(AuthError::InvalidApiKey) => {
+                        tracing::warn!("MCP session rejected: invalid API key");
+                        return Err(McpError::new(
+                            ErrorCode(-32001),
+                            "Invalid API key".to_string(),
+                            None,
+                        ));
+                    }
+                    Err(AuthError::InvalidToken(msg)) => {
+                        tracing::warn!("MCP session rejected: invalid token - {}", msg);
+                        return Err(McpError::new(
+                            ErrorCode(-32001),
+                            format!("Invalid token: {}", msg),
+                            None,
+                        ));
+                    }
+                    Err(AuthError::UserDeactivated) => {
+                        tracing::warn!("MCP session rejected: user deactivated");
+                        return Err(McpError::new(
+                            ErrorCode(-32001),
+                            "User account is deactivated".to_string(),
+                            None,
+                        ));
+                    }
+                    Err(AuthError::DatabaseError(msg)) => {
+                        tracing::error!("MCP session auth failed: database error - {}", msg);
+                        return Err(McpError::internal_error(
+                            format!("Authentication failed: {}", msg),
+                            None,
+                        ));
+                    }
+                    Err(AuthError::ApiKeyExpired) => {
+                        tracing::warn!("MCP session rejected: API key expired");
+                        return Err(McpError::new(
+                            ErrorCode(-32001),
+                            "API key has expired".to_string(),
+                            None,
+                        ));
+                    }
+                    Err(AuthError::ApiKeyRevoked) => {
+                        tracing::warn!("MCP session rejected: API key revoked");
+                        return Err(McpError::new(
+                            ErrorCode(-32001),
+                            "API key has been revoked".to_string(),
+                            None,
+                        ));
+                    }
+                    Err(AuthError::JwksError(msg)) => {
+                        tracing::error!("MCP session auth failed: JWKS error - {}", msg);
+                        return Err(McpError::internal_error(
+                            format!("JWKS error: {}", msg),
+                            None,
+                        ));
+                    }
+                }
+            }
 
             Ok(InitializeResult {
                 protocol_version: ProtocolVersion::V_2025_06_18,
@@ -215,11 +383,16 @@ impl ServerHandler for McpServer {
         let tool_name = request.name.to_string();
         let args = request.arguments.unwrap_or_default();
         let registry = self.tool_registry.clone();
-        let ctx = crate::tools::ToolContext {
-            request_context: context,
-        };
+        let user_context_storage = self.user_context.clone();
 
         async move {
+            // Read user context from the lock (set during initialize())
+            let user_context = user_context_storage.read().await.clone();
+            let ctx = crate::tools::ToolContext {
+                request_context: context,
+                user_context,
+            };
+
             match registry.call_tool(&tool_name, args, &ctx).await {
                 Ok(result) => Ok(result),
                 Err(e) => {
@@ -454,19 +627,43 @@ impl ServerHandler for McpServer {
 ///
 /// This exposes the MCP endpoint at `/mcp` on the given bind address,
 /// e.g. `127.0.0.1:3942` or `0.0.0.0:3942`.
+///
+/// # Arguments
+/// * `server` - The MCP server instance (used to get orchestrator and tool_registry)
+/// * `bind` - The address to bind to (e.g., "0.0.0.0:3942")
+/// * `auth_config` - Optional authentication configuration. If provided, auth extraction
+///   will be enabled for HTTP sessions.
 pub async fn start_mcp_http(
     server: Arc<McpServer>,
     bind: &str,
+    auth_config: Option<AuthConfig>,
 ) -> Result<()> {
     let orchestrator = server.orchestrator().clone();
     let tool_registry = server.tool_registry().clone();
+    let db = orchestrator.db().clone();
+
+    // Create auth extractor if config provided
+    let auth_extractor = auth_config.map(|config| {
+        Arc::new(AuthExtractor::new(config, db))
+    });
 
     let service = StreamableHttpService::new(
         {
             let orchestrator = orchestrator.clone();
             let tool_registry = tool_registry.clone();
+            let auth_extractor = auth_extractor.clone();
             move || {
-                Ok(McpServer::new(orchestrator.clone(), tool_registry.clone()))
+                // Create server with auth extractor if configured
+                let server = if let Some(ref extractor) = auth_extractor {
+                    McpServer::new_with_auth(
+                        orchestrator.clone(),
+                        tool_registry.clone(),
+                        extractor.clone(),
+                    )
+                } else {
+                    McpServer::new(orchestrator.clone(), tool_registry.clone())
+                };
+                Ok(server)
             }
         },
         LocalSessionManager::default().into(),
@@ -476,7 +673,11 @@ pub async fn start_mcp_http(
     let router = Router::new().nest_service("/mcp", service);
     let listener = tokio::net::TcpListener::bind(bind).await?;
 
-    tracing::info!("MCP HTTP server listening on http://{}", bind);
+    if auth_extractor.is_some() {
+        tracing::info!("MCP HTTP server listening on http://{} (auth enabled)", bind);
+    } else {
+        tracing::info!("MCP HTTP server listening on http://{} (anonymous mode)", bind);
+    }
 
     axum::serve(listener, router).await?;
 

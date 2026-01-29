@@ -1,3 +1,4 @@
+use crate::types::ServiceConfigId;
 use serde::Deserialize;
 use std::{collections::BTreeMap, env, fs, path::PathBuf};
 
@@ -35,7 +36,7 @@ pub struct McpServerConfig {
 #[derive(Debug, Clone)]
 pub enum McpServiceConfig {
     Stdio {
-        id: String,
+        id: ServiceConfigId,
         command: String,
         args: Vec<String>,
         env: BTreeMap<String, String>,
@@ -44,7 +45,7 @@ pub enum McpServiceConfig {
         disabled_tools: Vec<String>,
     },
     Http {
-        id: String,
+        id: ServiceConfigId,
         url: String,
         headers: BTreeMap<String, String>,
         disabled: bool,
@@ -55,9 +56,10 @@ pub enum McpServiceConfig {
 
 impl McpServiceConfig {
     pub fn from_json(id: String, cfg: McpServerConfig) -> anyhow::Result<Self> {
+        let service_id = ServiceConfigId::new(&id);
         if let Some(cmd) = cfg.command {
             return Ok(McpServiceConfig::Stdio {
-                id,
+                id: service_id,
                 command: cmd,
                 args: cfg.args,
                 env: cfg.env,
@@ -69,7 +71,7 @@ impl McpServiceConfig {
 
         if let Some(url) = cfg.url {
             return Ok(McpServiceConfig::Http {
-                id,
+                id: service_id,
                 url,
                 headers: cfg.headers,
                 disabled: cfg.disabled,
@@ -232,7 +234,7 @@ mod tests {
                 auto_approve,
                 disabled_tools,
             } => {
-                assert_eq!(id, "test-server");
+                assert_eq!(id.as_str(), "test-server");
                 assert_eq!(command, "node");
                 assert_eq!(*args, vec!["server.js".to_string()]);
                 assert_eq!(env.get("PATH"), Some(&"/usr/bin".to_string()));
@@ -269,7 +271,7 @@ mod tests {
                 auto_approve,
                 disabled_tools,
             } => {
-                assert_eq!(id, "test-server");
+                assert_eq!(id.as_str(), "test-server");
                 assert_eq!(url, "http://localhost:3000");
                 assert_eq!(headers.get("Authorization"), Some(&"Bearer token".to_string()));
                 assert!(disabled);
@@ -452,7 +454,7 @@ mod tests {
         // Check stdio server
         match stdio_server {
             Some(McpServiceConfig::Stdio { id, command, args, env, disabled, .. }) => {
-                assert_eq!(id, "stdio-server");
+                assert_eq!(id.as_str(), "stdio-server");
                 assert_eq!(command, "node");
                 assert_eq!(*args, vec!["server.js".to_string()]);
                 assert_eq!(env.get("NODE_ENV"), Some(&"production".to_string()));
@@ -464,7 +466,7 @@ mod tests {
         // Check http server
         match http_server {
             Some(McpServiceConfig::Http { id, url, headers, disabled, .. }) => {
-                assert_eq!(id, "http-server");
+                assert_eq!(id.as_str(), "http-server");
                 assert_eq!(url, "http://localhost:3000");
                 assert_eq!(headers.get("Authorization"), Some(&"Bearer token123".to_string()));
                 assert!(disabled);

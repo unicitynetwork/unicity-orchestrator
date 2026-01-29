@@ -4,7 +4,11 @@
 // real SurrealDB queries, but keep the logic simple so we can evolve them
 // alongside the schema and graph engine.
 
-use crate::db::schema::*;
+use crate::db::schema::{
+    ApiKeyCreate, ApiKeyRecord, CompatibilityType, CreateToolRecord, ManifestRecord,
+    ServiceCreate, ServiceRecord, ToolCompatibility, ToolRecord, ToolSearchQuery,
+    ToolSearchResult, ToolSequence,
+};
 use anyhow::{anyhow, Result};
 use serde::Deserialize;
 use serde_json::Value;
@@ -91,6 +95,7 @@ impl QueryBuilder {
         created.ok_or_else(|| anyhow!("failed to create tool record"))
     }
 
+    /// Find a tool by its ID.
     pub async fn find_tool_by_id(
         db: &Surreal<Any>,
         tool_id: RecordId,
@@ -380,6 +385,175 @@ impl QueryBuilder {
 
         let created: Option<ManifestRecord> = res.take(0)?;
         created.ok_or_else(|| anyhow!("failed to create manifest record"))
+    }
+
+    // =========================================================================
+    // API Key Management
+    // =========================================================================
+
+    /// Find an API key by its hash.
+    pub async fn find_api_key_by_hash(
+        db: &Surreal<Any>,
+        key_hash: &str,
+    ) -> Result<Option<ApiKeyRecord>> {
+        let mut res = db
+            .query(
+                r#"
+                SELECT * FROM api_key
+                WHERE key_hash = $key_hash
+                LIMIT 1
+                "#,
+            )
+            .bind(("key_hash", key_hash.to_string()))
+            .await?;
+
+        let api_key: Option<ApiKeyRecord> = res.take(0)?;
+        Ok(api_key)
+    }
+
+    /// Find an API key by its prefix.
+    pub async fn find_api_key_by_prefix(
+        db: &Surreal<Any>,
+        key_prefix: &str,
+    ) -> Result<Option<ApiKeyRecord>> {
+        let mut res = db
+            .query(
+                r#"
+                SELECT * FROM api_key
+                WHERE key_prefix = $key_prefix
+                LIMIT 1
+                "#,
+            )
+            .bind(("key_prefix", key_prefix.to_string()))
+            .await?;
+
+        let api_key: Option<ApiKeyRecord> = res.take(0)?;
+        Ok(api_key)
+    }
+
+    /// Create a new API key record.
+    pub async fn create_api_key(
+        db: &Surreal<Any>,
+        data: &ApiKeyCreate,
+    ) -> Result<ApiKeyRecord> {
+        let mut res = db
+            .query(
+                r#"
+                CREATE api_key SET
+                    key_hash = $key_hash,
+                    key_prefix = $key_prefix,
+                    user_id = $user_id,
+                    name = $name,
+                    is_active = true,
+                    expires_at = $expires_at,
+                    scopes = $scopes,
+                    created_at = time::now(),
+                    last_used_at = NONE
+                "#,
+            )
+            .bind(("key_hash", data.key_hash.to_string()))
+            .bind(("key_prefix", data.key_prefix.to_string()))
+            .bind(("user_id", data.user_id.clone()))
+            .bind(("name", data.name.clone()))
+            .bind(("expires_at", data.expires_at.clone()))
+            .bind(("scopes", data.scopes.clone()))
+            .await?;
+
+        let created: Option<ApiKeyRecord> = res.take(0)?;
+        created.ok_or_else(|| anyhow!("failed to create API key record"))
+    }
+
+    /// Update the last_used_at timestamp for an API key.
+    pub async fn update_api_key_last_used(
+        db: &Surreal<Any>,
+        key_id: &RecordId,
+    ) -> Result<()> {
+        db.query(
+            r#"
+                UPDATE api_key
+                SET last_used_at = time::now()
+                WHERE id = $id
+                "#,
+        )
+        .bind(("id", key_id.clone()))
+        .await?;
+
+        Ok(())
+    }
+
+    /// Deactivate (revoke) an API key.
+    pub async fn deactivate_api_key(
+        db: &Surreal<Any>,
+        key_id: &RecordId,
+    ) -> Result<()> {
+        db.query(
+            r#"
+                UPDATE api_key
+                SET is_active = false
+                WHERE id = $id
+                "#,
+        )
+        .bind(("id", key_id.clone()))
+        .await?;
+
+        Ok(())
+    }
+
+    /// Deactivate (revoke) an API key by its prefix.
+    pub async fn deactivate_api_key_by_prefix(
+        db: &Surreal<Any>,
+        key_prefix: &str,
+    ) -> Result<bool> {
+        let mut res = db
+            .query(
+                r#"
+                UPDATE api_key
+                SET is_active = false
+                WHERE key_prefix = $key_prefix
+                RETURN AFTER
+                "#,
+            )
+            .bind(("key_prefix", key_prefix.to_string()))
+            .await?;
+
+        let updated: Option<ApiKeyRecord> = res.take(0)?;
+        Ok(updated.is_some())
+    }
+
+    /// List all API keys (for administrative purposes).
+    /// Returns keys sorted by creation date, most recent first.
+    pub async fn list_api_keys(
+        db: &Surreal<Any>,
+    ) -> Result<Vec<ApiKeyRecord>> {
+        let mut res = db
+            .query(
+                r#"
+                SELECT * FROM api_key
+                ORDER BY created_at DESC
+                "#,
+            )
+            .await?;
+
+        let api_keys: Vec<ApiKeyRecord> = res.take(0)?;
+        Ok(api_keys)
+    }
+
+    /// List active API keys only.
+    pub async fn list_active_api_keys(
+        db: &Surreal<Any>,
+    ) -> Result<Vec<ApiKeyRecord>> {
+        let mut res = db
+            .query(
+                r#"
+                SELECT * FROM api_key
+                WHERE is_active = true
+                ORDER BY created_at DESC
+                "#,
+            )
+            .await?;
+
+        let api_keys: Vec<ApiKeyRecord> = res.take(0)?;
+        Ok(api_keys)
     }
 }
 

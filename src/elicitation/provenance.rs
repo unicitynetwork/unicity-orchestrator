@@ -56,7 +56,7 @@ impl ProvenanceWrapper {
             message: wrapped_message,
             url: request.url,
             elicitation_id: request.elicitation_id,
-            service_name: Some(service_name.to_string()),
+            service_name: Some(crate::types::ServiceName::new(service_name)),
         }
     }
 }
@@ -96,7 +96,7 @@ mod tests {
 
         let original = UrlElicitationRequest {
             message: "Authorization required".to_string(),
-            url: "https://github.com/login/oauth".to_string(),
+            url: crate::types::OAuthUrl::new("https://github.com/login/oauth"),
             elicitation_id: "elicitation-123".to_string(),
             service_name: None,
         };
@@ -104,8 +104,8 @@ mod tests {
         let wrapped = wrapper.wrap_url_request(original, "github", "service:github");
 
         assert!(wrapped.message.starts_with("[github]"));
-        assert_eq!(wrapped.url, "https://github.com/login/oauth");
-        assert_eq!(wrapped.service_name, Some("github".to_string()));
+        assert_eq!(wrapped.url.as_str(), "https://github.com/login/oauth");
+        assert_eq!(wrapped.service_name.map(|s| s.to_string()), Some("github".to_string()));
     }
 
     #[test]
@@ -121,7 +121,7 @@ mod tests {
     fn test_wrap_url_with_provenance_helper() {
         let request = UrlElicitationRequest {
             message: "Please authorize".to_string(),
-            url: "https://example.com/auth".to_string(),
+            url: crate::types::OAuthUrl::new("https://example.com/auth"),
             elicitation_id: "test-id".to_string(),
             service_name: None,
         };
@@ -129,6 +129,6 @@ mod tests {
         let wrapped = wrap_url_with_provenance(request, "github", "service:github");
 
         assert!(wrapped.message.starts_with("[github]"));
-        assert_eq!(wrapped.service_name, Some("github".to_string()));
+        assert_eq!(wrapped.service_name.map(|s| s.to_string()), Some("github".to_string()));
     }
 }

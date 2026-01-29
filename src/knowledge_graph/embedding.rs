@@ -12,7 +12,6 @@ use embed_anything::{
     embed_query,
 };
 use rmcp::model::JsonObject;
-use serde_json::{json, Value};
 
 pub struct EmbeddingManager {
     db: Surreal<Any>,
@@ -339,6 +338,7 @@ pub struct EmbeddingSearchResult {
 }
 
 impl EmbeddingManager {
+    /// Search for tools by embedding similarity.
     pub async fn search_tools_by_embedding(
         &mut self,
         query: &str,

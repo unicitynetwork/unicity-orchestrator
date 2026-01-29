@@ -4,11 +4,9 @@
 //! using JSON Schema for validation. This module works with rmcp's type-safe
 //! `ElicitationSchema` for request construction and provides response validation.
 
-use crate::elicitation::{
-    ElicitationError, ElicitationResult, ElicitationAction,
-    ElicitationSchema, CreateElicitationResult, StringFormat,
-};
+use crate::elicitation::{ElicitationError, ElicitationResult, ElicitationAction, ElicitationSchema, CreateElicitationResult, StringFormat};
 use serde_json::Value;
+use url::Url;
 
 /// Form mode elicitation handler.
 ///
@@ -184,7 +182,7 @@ impl FormHandler {
             }
             StringFormat::Uri => {
                 // Validate URI format
-                if url::Url::parse(value).is_err() {
+                if Url::parse(value).is_err() {
                     return Err(ElicitationError::InvalidSchema(
                         format!("Property '{}' is not a valid URI", name)
                     ));

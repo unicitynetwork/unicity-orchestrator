@@ -1,21 +1,26 @@
 //! Core orchestrator logic - the "brain" that handles tool selection,
 //! planning, and execution using semantic search and symbolic reasoning.
 
+pub mod user_filter;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use surrealdb::engine::any::Any;
 use surrealdb::{RecordId, Surreal};
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use serde_json::Value;
 
-use crate::db::{DatabaseConfig, create_connection, ensure_schema, ToolRecord};
+use crate::auth::UserContext;
+use crate::db::{DatabaseConfig, create_connection, ensure_schema, ToolRecord, ServiceRecord};
+use crate::db::schema::{AuditAction, AuditLogCreate};
 use crate::knowledge_graph::{KnowledgeGraph, EmbeddingManager, SymbolicReasoner, ToolSelection};
 use crate::config::McpConfigs;
 use crate::mcp_client::RunningService;
 use crate::prompts::{PromptRegistry, PromptForwarder};
 use crate::resources::{ResourceRegistry, ResourceForwarder};
-use crate::elicitation::ElicitationCoordinator;
+use crate::elicitation::{ElicitationCoordinator, ElicitationFallbackPolicy, ApprovalRequest, PermissionStatus};
+use crate::types::{ExternalUserId, ServiceId, ServiceName, ToolId};
 use rmcp::model::JsonObject;
 use std::sync::Arc as StdArc;
 use tokio::sync::Mutex as TokioMutex;
@@ -243,11 +248,25 @@ impl Orchestrator {
     }
 
     /// Query tools using semantic search + symbolic reasoning.
+    ///
+    /// # Arguments
+    /// * `query` - Natural language query describing the desired tool
+    /// * `context` - Optional JSON context to guide tool selection
+    /// * `user_context` - Optional user context for multi-tenant filtering
     pub async fn query_tools(
         &self,
         query: &str,
         context: Option<Value>,
+        user_context: Option<&UserContext>,
     ) -> Result<Vec<ToolSelection>> {
+        // Import user filter for multi-tenant filtering
+        use crate::orchestrator::user_filter::UserToolFilter;
+
+        // Create user filter based on user context
+        let filter = match user_context {
+            Some(ctx) => UserToolFilter::from_user_context(&self.db, ctx).await?,
+            None => UserToolFilter::allow_all(),
+        };
         // Semantic search first
         let semantic_hits = {
             let mut embedding_manager = self.embedding_manager.lock().await;
@@ -274,16 +293,22 @@ impl Orchestrator {
                 .take(0)?
         };
 
+        // Apply user filter to tools (removes blocked services)
+        let tools = filter.filter_tools(tools);
+
         let context_map = context
             .map(|c| serde_json::from_value(c).unwrap_or_default())
             .unwrap_or_default();
 
-        let selections = {
+        let mut selections = {
             let mut symbolic_reasoner = self.symbolic_reasoner.lock().await;
             symbolic_reasoner
                 .infer_tool_selection(query, &tools, &context_map)
                 .await?
         };
+
+        // Apply trust boost for trusted services
+        filter.apply_trust_boost(&mut selections, 0.1);
 
         // Fallback to raw embedding hits if symbolic reasoning produced nothing
         if selections.is_empty() && !semantic_hits.is_empty() {
@@ -291,11 +316,20 @@ impl Orchestrator {
 
             for hit in &semantic_hits {
                 if let Some(tool) = &hit.tool {
+                    // Skip blocked tools in fallback
+                    if !filter.is_tool_allowed(tool) {
+                        continue;
+                    }
+                    let mut confidence = hit.similarity;
+                    // Apply trust boost in fallback
+                    if filter.is_service_trusted(&tool.service_id) {
+                        confidence = (confidence + 0.1).min(1.0);
+                    }
                     fallback.push(ToolSelection {
                         tool_id: tool.id.clone(),
                         tool_name: tool.name.clone(),
                         service_id: tool.service_id.clone(),
-                        confidence: hit.similarity,
+                        confidence,
                         reasoning: format!(
                             "Selected by cosine similarity {:.3} to query embedding",
                             hit.similarity
@@ -313,21 +347,42 @@ impl Orchestrator {
     }
 
     /// Get the single best tool for a query.
+    ///
+    /// # Arguments
+    /// * `query` - Natural language query describing the desired tool
+    /// * `context` - Optional JSON context to guide tool selection
+    /// * `user_context` - Optional user context for multi-tenant filtering
     pub async fn orchestrate_tool(
         &self,
         query: &str,
         context: Option<Value>,
+        user_context: Option<&UserContext>,
     ) -> Result<Option<ToolSelection>> {
-        let selections = self.query_tools(query, context).await?;
+        let selections = self.query_tools(query, context, user_context).await?;
         Ok(selections.into_iter().next())
     }
 
     /// Plan a multi-step tool sequence for a query.
+    ///
+    /// # Arguments
+    /// * `query` - Natural language query describing the goal
+    /// * `context` - Optional JSON context to guide tool planning
+    /// * `user_context` - Optional user context for multi-tenant filtering
     pub async fn plan_tools_for_query(
         &self,
         query: &str,
         _context: Option<Value>,
+        user_context: Option<&UserContext>,
     ) -> Result<Option<PlanResult>> {
+        // Import user filter for multi-tenant filtering
+        use crate::orchestrator::user_filter::UserToolFilter;
+
+        // Create user filter based on user context
+        let filter = match user_context {
+            Some(ctx) => UserToolFilter::from_user_context(&self.db, ctx).await?,
+            None => UserToolFilter::allow_all(),
+        };
+
         let semantic_hits = {
             let mut embedding_manager = self.embedding_manager.lock().await;
             embedding_manager
@@ -352,6 +407,9 @@ impl Orchestrator {
                 .await?
                 .take(0)?
         };
+
+        // Apply user filter to tools (removes blocked services)
+        let tools = filter.filter_tools(tools);
 
         if tools.is_empty() {
             return Ok(None);
@@ -423,7 +481,7 @@ impl Orchestrator {
         }))
     }
 
-    /// Execute a selected tool.
+    /// Execute a selected tool (without approval checks - for internal use).
     pub async fn execute_selected_tool(
         &self,
         selection: &ToolSelection,
@@ -435,6 +493,290 @@ impl Orchestrator {
             selection,
             args,
         ).await
+    }
+
+    /// Execute a selected tool with approval checks.
+    ///
+    /// This method checks if the user has permission to execute the tool.
+    /// If not, it will send an elicitation request to the client asking for
+    /// approval (allow once, always allow, or deny).
+    ///
+    /// # Arguments
+    /// * `selection` - The tool selection to execute
+    /// * `args` - Arguments to pass to the tool
+    /// * `user_context` - Optional user context for permission checks
+    ///
+    /// # Returns
+    /// * `Ok(contents)` - Tool execution results if approved
+    /// * `Err` - If denied, cancelled, or execution failed
+    pub async fn execute_selected_tool_with_approval(
+        &self,
+        selection: &ToolSelection,
+        args: JsonObject,
+        user_context: Option<&UserContext>,
+    ) -> Result<Vec<rmcp::model::Content>> {
+        // Get user ID - use "anonymous" for stdio/local mode
+        let user_id = ExternalUserId::new(
+            user_context
+                .map(|ctx| ctx.user_id_string())
+                .unwrap_or_else(|| "anonymous".to_string())
+        );
+
+        // Look up the service to get its name for the approval message
+        let service_name = ServiceName::new(
+            self.get_service_name(&selection.service_id)
+                .await
+                .unwrap_or_else(|| selection.service_id.to_string())
+        );
+
+        let tool_id = ToolId::new(selection.tool_id.to_string());
+        let service_id = ServiceId::new(selection.service_id.to_string());
+
+        // Check existing permission
+        let approval_manager = self.elicitation_coordinator.approval_manager();
+        let permission_status = approval_manager
+            .check_permission(&tool_id, &service_id, &user_id)
+            .await
+            .map_err(|e| anyhow!("Failed to check permission: {:?}", e))?;
+
+        match permission_status {
+            PermissionStatus::Granted => {
+                // Permission already granted - execute the tool
+                tracing::debug!(
+                    tool_id = %tool_id,
+                    user_id = %user_id,
+                    "Tool execution approved (existing permission)"
+                );
+                let result = self.execute_selected_tool(selection, args).await;
+
+                // Audit log the execution
+                self.audit_log(AuditLogCreate {
+                    user_id: Some(user_id.to_string()),
+                    action: AuditAction::ToolExecuted.as_str().to_string(),
+                    resource_type: "tool".to_string(),
+                    resource_id: Some(tool_id.to_string()),
+                    details: Some(serde_json::json!({
+                        "service_id": service_id.to_string(),
+                        "service_name": service_name.to_string(),
+                        "success": result.is_ok(),
+                        "permission_type": "existing",
+                    })),
+                    ip_address: user_context.and_then(|ctx| ctx.ip_address().map(|s| s.to_string())),
+                    user_agent: user_context.and_then(|ctx| ctx.user_agent().map(|s| s.to_string())),
+                }).await;
+
+                result
+            }
+            PermissionStatus::Denied => {
+                // User previously denied this tool
+                self.audit_log(AuditLogCreate {
+                    user_id: Some(user_id.to_string()),
+                    action: AuditAction::PermissionDenied.as_str().to_string(),
+                    resource_type: "tool".to_string(),
+                    resource_id: Some(tool_id.to_string()),
+                    details: Some(serde_json::json!({
+                        "service_id": service_id.to_string(),
+                        "reason": "previously_denied",
+                    })),
+                    ip_address: user_context.and_then(|ctx| ctx.ip_address().map(|s| s.to_string())),
+                    user_agent: user_context.and_then(|ctx| ctx.user_agent().map(|s| s.to_string())),
+                }).await;
+
+                Err(anyhow!("Tool execution denied by user"))
+            }
+            PermissionStatus::Expired => {
+                // Permission expired - need to re-approve
+                self.request_tool_approval(
+                    selection,
+                    args,
+                    &tool_id,
+                    &service_id,
+                    &service_name,
+                    &user_id,
+                ).await
+            }
+            PermissionStatus::Required => {
+                // No permission yet - need to request approval
+                self.request_tool_approval(
+                    selection,
+                    args,
+                    &tool_id,
+                    &service_id,
+                    &service_name,
+                    &user_id,
+                ).await
+            }
+        }
+    }
+
+    /// Request approval from the user via elicitation.
+    async fn request_tool_approval(
+        &self,
+        selection: &ToolSelection,
+        args: JsonObject,
+        tool_id: &ToolId,
+        service_id: &ServiceId,
+        service_name: &ServiceName,
+        user_id: &ExternalUserId,
+    ) -> Result<Vec<rmcp::model::Content>> {
+        // Check if client supports elicitation
+        if !self.elicitation_coordinator.client_supports_elicitation().await {
+            // Client doesn't support elicitation - check fallback policy
+            let policy = self.elicitation_coordinator.fallback_policy().await;
+            match policy {
+                ElicitationFallbackPolicy::Allow => {
+                    tracing::warn!(
+                        tool_id = %tool_id,
+                        "Client does not support elicitation, allowing tool execution (fallback policy: allow)"
+                    );
+                    return self.execute_selected_tool(selection, args).await;
+                }
+                ElicitationFallbackPolicy::Deny => {
+                    tracing::warn!(
+                        tool_id = %tool_id,
+                        "Client does not support elicitation, denying tool execution (fallback policy: deny)"
+                    );
+                    return Err(anyhow!(
+                        "Tool execution denied: client does not support elicitation and fallback policy is set to deny"
+                    ));
+                }
+            }
+        }
+
+        let approval_manager = self.elicitation_coordinator.approval_manager();
+
+        // Create the approval request
+        let request = ApprovalRequest {
+            tool_id: tool_id.clone(),
+            service_id: service_id.clone(),
+            service_name: service_name.clone(),
+            user_id: user_id.clone(),
+            arguments: Some(serde_json::to_value(&args).unwrap_or_default()),
+        };
+
+        // Create the elicitation schema and message
+        let (message, schema) = approval_manager.create_approval_elicitation(&request);
+
+        tracing::info!(
+            tool_id = %tool_id,
+            service_name = %service_name,
+            user_id = %user_id,
+            "Requesting tool approval from user"
+        );
+
+        // Send the elicitation request
+        let result = self.elicitation_coordinator
+            .create_elicitation(&message, schema)
+            .await
+            .map_err(|e| anyhow!("Failed to send elicitation request: {:?}", e))?;
+
+        // Handle the response
+        let permission_status = approval_manager
+            .handle_approval_response(&request, &result)
+            .await
+            .map_err(|e| anyhow!("Failed to handle approval response: {:?}", e))?;
+
+        match permission_status {
+            PermissionStatus::Granted => {
+                tracing::info!(
+                    tool_id = %tool_id,
+                    user_id = %user_id,
+                    "Tool execution approved by user"
+                );
+
+                // Determine permission type from response
+                let permission_type = result.content.as_ref()
+                    .and_then(|c| c.get("action"))
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown");
+
+                // Check if this was a one-time approval
+                let is_one_time = permission_type == "allow_once";
+
+                // Execute the tool
+                let exec_result = self.execute_selected_tool(selection, args).await;
+
+                // Audit log the permission grant and execution
+                self.audit_log(AuditLogCreate {
+                    user_id: Some(user_id.to_string()),
+                    action: AuditAction::PermissionGranted.as_str().to_string(),
+                    resource_type: "tool".to_string(),
+                    resource_id: Some(tool_id.to_string()),
+                    details: Some(serde_json::json!({
+                        "service_id": service_id.to_string(),
+                        "service_name": service_name.to_string(),
+                        "permission_type": permission_type,
+                    })),
+                    ip_address: None,
+                    user_agent: None,
+                }).await;
+
+                self.audit_log(AuditLogCreate {
+                    user_id: Some(user_id.to_string()),
+                    action: AuditAction::ToolExecuted.as_str().to_string(),
+                    resource_type: "tool".to_string(),
+                    resource_id: Some(tool_id.to_string()),
+                    details: Some(serde_json::json!({
+                        "service_id": service_id.to_string(),
+                        "service_name": service_name.to_string(),
+                        "success": exec_result.is_ok(),
+                        "permission_type": permission_type,
+                    })),
+                    ip_address: None,
+                    user_agent: None,
+                }).await;
+
+                // Consume one-time permission after execution
+                if is_one_time {
+                    let _ = approval_manager
+                        .consume_permission(tool_id, service_id, user_id)
+                        .await;
+                }
+
+                exec_result
+            }
+            PermissionStatus::Denied => {
+                tracing::info!(
+                    tool_id = %tool_id,
+                    user_id = %user_id,
+                    "Tool execution denied by user"
+                );
+
+                // Audit log the denial
+                self.audit_log(AuditLogCreate {
+                    user_id: Some(user_id.to_string()),
+                    action: AuditAction::PermissionDenied.as_str().to_string(),
+                    resource_type: "tool".to_string(),
+                    resource_id: Some(tool_id.to_string()),
+                    details: Some(serde_json::json!({
+                        "service_id": service_id.to_string(),
+                        "service_name": service_name.to_string(),
+                        "reason": "user_denied",
+                    })),
+                    ip_address: None,
+                    user_agent: None,
+                }).await;
+
+                Err(anyhow!("Tool execution denied by user"))
+            }
+            _ => {
+                // Cancelled or other status
+                Err(anyhow!("Tool approval cancelled"))
+            }
+        }
+    }
+
+    /// Look up the service name by ID.
+    async fn get_service_name(&self, service_id: &RecordId) -> Option<String> {
+        let query = "SELECT * FROM service WHERE id = $id LIMIT 1";
+        let mut res = self.db
+            .query(query)
+            .bind(("id", service_id.clone()))
+            .await
+            .ok()?;
+
+        let service: Option<ServiceRecord> = res.take(0).ok()?;
+        service.and_then(|s| s.name.or(s.title))
     }
 
     /// Get reference to the database.
@@ -486,5 +828,35 @@ impl Orchestrator {
     /// Get reference to the elicitation coordinator.
     pub fn elicitation_coordinator(&self) -> &StdArc<ElicitationCoordinator> {
         &self.elicitation_coordinator
+    }
+
+    /// Write an audit log entry.
+    pub async fn audit_log(&self, entry: AuditLogCreate) {
+        let result = self.db
+            .query(
+                r#"
+                CREATE audit_log CONTENT {
+                    user_id: $user_id,
+                    action: $action,
+                    resource_type: $resource_type,
+                    resource_id: $resource_id,
+                    details: $details,
+                    ip_address: $ip_address,
+                    user_agent: $user_agent
+                }
+                "#,
+            )
+            .bind(("user_id", entry.user_id))
+            .bind(("action", entry.action))
+            .bind(("resource_type", entry.resource_type))
+            .bind(("resource_id", entry.resource_id))
+            .bind(("details", entry.details))
+            .bind(("ip_address", entry.ip_address))
+            .bind(("user_agent", entry.user_agent))
+            .await;
+
+        if let Err(e) = result {
+            tracing::warn!("Failed to write audit log: {}", e);
+        }
     }
 }

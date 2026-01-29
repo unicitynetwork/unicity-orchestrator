@@ -6,6 +6,7 @@
 //! - User preferences for elicitation
 
 use crate::elicitation::{ElicitationError, ElicitationResult, ToolPermission};
+use crate::types::{ExternalUserId, IdentityProvider, RedirectUri};
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 use std::sync::Arc;
@@ -22,12 +23,12 @@ pub struct PermissionStore {
 /// OAuth state entry for URL mode elicitation.
 #[derive(Clone, Debug)]
 struct OAuthEntry {
-    user_id: String,
-    provider: String,
+    user_id: ExternalUserId,
+    provider: IdentityProvider,
     state_token: String,
     created_at: chrono::DateTime<chrono::Utc>,
     expires_at: chrono::DateTime<chrono::Utc>,
-    redirect_uri: String,
+    redirect_uri: RedirectUri,
 }
 
 impl PermissionStore {
@@ -41,6 +42,13 @@ impl PermissionStore {
 
     /// Save a tool permission.
     pub async fn save_permission(&self, permission: &ToolPermission) -> ElicitationResult<ToolPermission> {
+        // Serialize action as just the variant name (e.g., "allow_once"), not a JSON string
+        let action_str = match permission.action {
+            crate::elicitation::ApprovalAction::AllowOnce => "allow_once",
+            crate::elicitation::ApprovalAction::AlwaysAllow => "always_allow",
+            crate::elicitation::ApprovalAction::Deny => "deny",
+        };
+
         let query = r#"
             CREATE permission CONTENT {
                 tool_id: $tool_id,
@@ -57,7 +65,7 @@ impl PermissionStore {
             .bind(("tool_id", permission.tool_id.clone()))
             .bind(("service_id", permission.service_id.clone()))
             .bind(("user_id", permission.user_id.clone()))
-            .bind(("action", serde_json::to_string(&permission.action).unwrap()))
+            .bind(("action", action_str.to_string()))
             .bind(("created_at", permission.created_at.clone()))
             .bind(("expires_at", permission.expires_at.clone()))
             .await
@@ -65,7 +73,7 @@ impl PermissionStore {
 
         #[derive(serde::Deserialize)]
         struct Created {
-            id: Option<String>,
+            id: surrealdb::RecordId,
         }
 
         let created: Vec<Created> = res.take(0)
@@ -73,7 +81,7 @@ impl PermissionStore {
 
         let mut result = permission.clone();
         if let Some(record) = created.first() {
-            result.id = record.id.clone();
+            result.id = Some(record.id.to_string());
         }
 
         Ok(result)
@@ -90,8 +98,17 @@ impl PermissionStore {
         let service_id = service_id.to_string();
         let user_id = user_id.to_string();
 
+        // Select specific fields to avoid id deserialization issues
         let query = r#"
-            SELECT * FROM permission
+            SELECT
+                meta::id(id) as id,
+                tool_id,
+                service_id,
+                user_id,
+                action,
+                created_at,
+                expires_at
+            FROM permission
             WHERE tool_id = $tool_id
               AND service_id = $service_id
               AND user_id = $user_id
@@ -238,23 +255,19 @@ impl PermissionStore {
     }
 }
 
-// ============================================================================
-// OAuth State Management (in-memory only for security)
-// ============================================================================
-
 /// OAuth state for URL mode elicitation.
 #[derive(Clone, Debug)]
 pub struct OAuthState {
     /// Unique elicitation ID
     pub elicitation_id: String,
     /// User ID
-    pub user_id: String,
+    pub user_id: ExternalUserId,
     /// OAuth provider (e.g., "github", "google")
-    pub provider: String,
+    pub provider: IdentityProvider,
     /// State token for CSRF protection
     pub state_token: String,
     /// Redirect URI after OAuth completes
-    pub redirect_uri: String,
+    pub redirect_uri: RedirectUri,
     /// When this state expires
     pub expires_at: chrono::DateTime<chrono::Utc>,
 }
@@ -268,7 +281,7 @@ impl PermissionStore {
             state_token: state.state_token.clone(),
             created_at: chrono::Utc::now(),
             expires_at: state.expires_at,
-            redirect_uri: state.redirect_uri,
+            redirect_uri: state.redirect_uri.clone(),
         };
 
         let mut state_map = self.oauth_state.lock().await;
@@ -333,14 +346,14 @@ mod tests {
         // For now, just verify the struct compiles
         let state = OAuthState {
             elicitation_id: "test-id".to_string(),
-            user_id: "user123".to_string(),
-            provider: "github".to_string(),
+            user_id: ExternalUserId::new("user123"),
+            provider: IdentityProvider::new("github"),
             state_token: "random-token".to_string(),
-            redirect_uri: "http://localhost/callback".to_string(),
+            redirect_uri: RedirectUri::new("http://localhost/callback"),
             expires_at: chrono::Utc::now() + chrono::Duration::hours(1),
         };
 
         assert_eq!(state.elicitation_id, "test-id");
-        assert_eq!(state.provider, "github");
+        assert_eq!(state.provider.as_str(), "github");
     }
 }

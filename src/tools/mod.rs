@@ -12,7 +12,9 @@ pub use registry::{ToolHandler, ToolRegistry, ToolContext};
 mod select_tool;
 mod plan_tools;
 mod execute_tool;
+mod list_discovered_tools;
 
 pub use select_tool::SelectToolHandler;
 pub use plan_tools::PlanToolsHandler;
 pub use execute_tool::ExecuteToolHandler;
+pub use list_discovered_tools::ListDiscoveredToolsHandler;

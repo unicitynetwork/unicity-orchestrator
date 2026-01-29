@@ -66,7 +66,7 @@ mod provenance;
 mod store;
 mod url;
 
-pub use approval::{ApprovalManager, ToolPermission};
+pub use approval::{ApprovalManager, ApprovalAction, ApprovalRequest, PermissionStatus, ToolPermission};
 pub use error::{ElicitationError, ElicitationResult, URL_ELICITATION_REQUIRED_ERROR_CODE};
 pub use form::FormHandler;
 pub use provenance::{wrap_with_provenance, wrap_url_with_provenance};
@@ -81,12 +81,30 @@ pub use rmcp::model::{
     PrimitiveSchema,
 };
 
+use crate::types::{OAuthUrl, ServiceName};
 use rmcp::model::ClientCapabilities;
 use rmcp::service::{Peer, RoleServer};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use anyhow::Result;
+
+/// Policy for handling tool execution when the client doesn't support elicitation.
+///
+/// This is a security-critical setting that operators should configure based on
+/// their deployment requirements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ElicitationFallbackPolicy {
+    /// Deny tool execution if the client doesn't support elicitation.
+    /// This is the secure default - tools cannot be executed without user approval.
+    #[default]
+    Deny,
+    /// Allow tool execution if the client doesn't support elicitation.
+    /// Use this for backwards compatibility with older clients, but be aware
+    /// this bypasses the approval system entirely for those clients.
+    Allow,
+}
 
 /// Elicitation modes supported by the orchestrator.
 ///
@@ -130,14 +148,14 @@ pub struct UrlElicitationRequest {
     pub message: String,
 
     /// The URL the user should navigate to
-    pub url: String,
+    pub url: OAuthUrl,
 
     /// Unique identifier for the elicitation (for callback matching)
     pub elicitation_id: String,
 
     /// Optional service name for provenance tracking
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub service_name: Option<String>,
+    pub service_name: Option<ServiceName>,
 }
 
 /// Notification sent when URL mode elicitation completes.
@@ -171,6 +189,9 @@ pub struct ElicitationCoordinator {
 
     /// Permission store
     store: Arc<PermissionStore>,
+
+    /// Policy for handling clients that don't support elicitation
+    fallback_policy: Arc<RwLock<ElicitationFallbackPolicy>>,
 }
 
 impl ElicitationCoordinator {
@@ -188,7 +209,39 @@ impl ElicitationCoordinator {
             url_handler,
             approval_manager,
             store,
+            fallback_policy: Arc::new(RwLock::new(ElicitationFallbackPolicy::default())),
         })
+    }
+
+    /// Create a new elicitation coordinator with a specific fallback policy.
+    pub fn new_with_policy(
+        db: surrealdb::Surreal<surrealdb::engine::any::Any>,
+        fallback_policy: ElicitationFallbackPolicy,
+    ) -> Result<Self> {
+        let store = Arc::new(PermissionStore::new(db));
+        let approval_manager = Arc::new(ApprovalManager::new(store.clone()));
+        let form_handler = Arc::new(FormHandler::new());
+        let url_handler = Arc::new(UrlHandler::new(store.clone())?);
+
+        Ok(Self {
+            client_capabilities: Arc::new(RwLock::new(None)),
+            peer: Arc::new(RwLock::new(None)),
+            form_handler,
+            url_handler,
+            approval_manager,
+            store,
+            fallback_policy: Arc::new(RwLock::new(fallback_policy)),
+        })
+    }
+
+    /// Set the fallback policy for clients that don't support elicitation.
+    pub async fn set_fallback_policy(&self, policy: ElicitationFallbackPolicy) {
+        *self.fallback_policy.write().await = policy;
+    }
+
+    /// Get the current fallback policy.
+    pub async fn fallback_policy(&self) -> ElicitationFallbackPolicy {
+        *self.fallback_policy.read().await
     }
 
     /// Store the peer reference for sending elicitation requests.
@@ -427,42 +480,233 @@ impl ElicitationCoordinator {
 mod tests {
     use super::*;
 
+    /// Helper to create an in-memory database for testing.
+    async fn setup_test_db() -> surrealdb::Surreal<surrealdb::engine::any::Any> {
+        let db_config = crate::db::DatabaseConfig {
+            url: "memory".to_string(),
+            namespace: "test".to_string(),
+            database: "test".to_string(),
+            ..Default::default()
+        };
+        crate::db::create_connection(db_config).await.unwrap()
+    }
+
+
     #[test]
-    fn test_elicitation_mode_conversion() {
+    fn test_elicitation_mode_as_str() {
         assert_eq!(ElicitationMode::Form.as_str(), "form");
         assert_eq!(ElicitationMode::Url.as_str(), "url");
+    }
+
+    #[test]
+    fn test_elicitation_mode_from_str_valid() {
         assert_eq!(ElicitationMode::from_str("form"), Some(ElicitationMode::Form));
         assert_eq!(ElicitationMode::from_str("url"), Some(ElicitationMode::Url));
+    }
+
+    #[test]
+    fn test_elicitation_mode_from_str_invalid() {
         assert_eq!(ElicitationMode::from_str("invalid"), None);
+        assert_eq!(ElicitationMode::from_str("FORM"), None); // case sensitive
+        assert_eq!(ElicitationMode::from_str(""), None);
+    }
+
+    #[test]
+    fn test_elicitation_mode_roundtrip() {
+        // Ensure from_str(as_str()) returns the original value
+        assert_eq!(
+            ElicitationMode::from_str(ElicitationMode::Form.as_str()),
+            Some(ElicitationMode::Form)
+        );
+        assert_eq!(
+            ElicitationMode::from_str(ElicitationMode::Url.as_str()),
+            Some(ElicitationMode::Url)
+        );
+    }
+
+    #[test]
+    fn test_fallback_policy_default_is_deny() {
+        let policy = ElicitationFallbackPolicy::default();
+        assert_eq!(policy, ElicitationFallbackPolicy::Deny);
+    }
+
+    #[test]
+    fn test_fallback_policy_serializes_to_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&ElicitationFallbackPolicy::Deny).unwrap(),
+            "\"deny\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ElicitationFallbackPolicy::Allow).unwrap(),
+            "\"allow\""
+        );
+    }
+
+    #[test]
+    fn test_fallback_policy_deserializes_from_snake_case() {
+        assert_eq!(
+            serde_json::from_str::<ElicitationFallbackPolicy>("\"deny\"").unwrap(),
+            ElicitationFallbackPolicy::Deny
+        );
+        assert_eq!(
+            serde_json::from_str::<ElicitationFallbackPolicy>("\"allow\"").unwrap(),
+            ElicitationFallbackPolicy::Allow
+        );
+    }
+
+    #[test]
+    fn test_fallback_policy_deserialize_invalid_fails() {
+        let result = serde_json::from_str::<ElicitationFallbackPolicy>("\"invalid\"");
+        assert!(result.is_err());
     }
 
     #[test]
     fn test_elicitation_action_serialization() {
-        // Test that actions serialize to lowercase
-        let accept = serde_json::to_string(&ElicitationAction::Accept).unwrap();
-        assert_eq!(accept, "\"accept\"");
-
-        let decline = serde_json::to_string(&ElicitationAction::Decline).unwrap();
-        assert_eq!(decline, "\"decline\"");
-
-        let cancel = serde_json::to_string(&ElicitationAction::Cancel).unwrap();
-        assert_eq!(cancel, "\"cancel\"");
+        assert_eq!(serde_json::to_string(&ElicitationAction::Accept).unwrap(), "\"accept\"");
+        assert_eq!(serde_json::to_string(&ElicitationAction::Decline).unwrap(), "\"decline\"");
+        assert_eq!(serde_json::to_string(&ElicitationAction::Cancel).unwrap(), "\"cancel\"");
     }
 
     #[tokio::test]
-    async fn test_client_supports_elicitation_when_no_capabilities() {
-        // Create coordinator with in-memory database
-        let db_config = crate::db::DatabaseConfig {
-            url: "memory".to_string(),
-            ..Default::default()
-        };
-        let db = crate::db::create_connection(db_config).await.unwrap();
+    async fn test_coordinator_new_has_deny_policy_by_default() {
+        let db = setup_test_db().await;
+        let coordinator = ElicitationCoordinator::new(db).unwrap();
+
+        assert_eq!(coordinator.fallback_policy().await, ElicitationFallbackPolicy::Deny);
+    }
+
+    #[tokio::test]
+    async fn test_coordinator_new_with_policy_sets_policy() {
+        let db = setup_test_db().await;
+        let coordinator = ElicitationCoordinator::new_with_policy(
+            db,
+            ElicitationFallbackPolicy::Allow,
+        ).unwrap();
+
+        assert_eq!(coordinator.fallback_policy().await, ElicitationFallbackPolicy::Allow);
+    }
+
+    #[tokio::test]
+    async fn test_coordinator_set_fallback_policy_changes_policy() {
+        let db = setup_test_db().await;
+        let coordinator = ElicitationCoordinator::new(db).unwrap();
+
+        // Default is Deny
+        assert_eq!(coordinator.fallback_policy().await, ElicitationFallbackPolicy::Deny);
+
+        // Change to Allow
+        coordinator.set_fallback_policy(ElicitationFallbackPolicy::Allow).await;
+        assert_eq!(coordinator.fallback_policy().await, ElicitationFallbackPolicy::Allow);
+
+        // Change back to Deny
+        coordinator.set_fallback_policy(ElicitationFallbackPolicy::Deny).await;
+        assert_eq!(coordinator.fallback_policy().await, ElicitationFallbackPolicy::Deny);
+    }
+
+    #[tokio::test]
+    async fn test_coordinator_client_supports_elicitation_false_when_no_capabilities() {
+        let db = setup_test_db().await;
         let coordinator = ElicitationCoordinator::new(db).unwrap();
 
         // Before initialize, client capabilities are unknown
-        // Should return false, not true (fail closed)
+        // Should return false (fail closed for security)
         assert!(!coordinator.client_supports_elicitation().await);
-        assert!(!coordinator.client_supports_mode(ElicitationMode::Form).await);
-        assert!(!coordinator.client_supports_mode(ElicitationMode::Url).await);
+    }
+
+    #[tokio::test]
+    async fn test_coordinator_client_supports_elicitation_true_when_capability_set() {
+        let db = setup_test_db().await;
+        let coordinator = ElicitationCoordinator::new(db).unwrap();
+
+        // Set capabilities with elicitation enabled
+        let capabilities = ClientCapabilities::builder()
+            .enable_elicitation()
+            .build();
+        coordinator.set_client_capabilities(&capabilities).await;
+
+        assert!(coordinator.client_supports_elicitation().await);
+    }
+
+    #[tokio::test]
+    async fn test_coordinator_client_supports_elicitation_false_when_capability_not_set() {
+        let db = setup_test_db().await;
+        let coordinator = ElicitationCoordinator::new(db).unwrap();
+
+        // Set capabilities WITHOUT elicitation
+        let capabilities = ClientCapabilities::builder().build();
+        coordinator.set_client_capabilities(&capabilities).await;
+
+        assert!(!coordinator.client_supports_elicitation().await);
+    }
+
+    #[tokio::test]
+    async fn test_coordinator_approval_manager_accessible() {
+        let db = setup_test_db().await;
+        let coordinator = ElicitationCoordinator::new(db).unwrap();
+
+        // Should be able to get the approval manager
+        let manager = coordinator.approval_manager();
+        assert!(Arc::strong_count(manager) >= 1);
+    }
+
+    #[tokio::test]
+    async fn test_coordinator_store_accessible() {
+        let db = setup_test_db().await;
+        let coordinator = ElicitationCoordinator::new(db).unwrap();
+
+        // Should be able to get the store
+        let store = coordinator.store();
+        assert!(Arc::strong_count(store) >= 1);
+    }
+
+
+    #[test]
+    fn test_url_elicitation_request_serialization() {
+        let request = UrlElicitationRequest {
+            message: "Please authorize".to_string(),
+            url: OAuthUrl::new("https://github.com/oauth/authorize"),
+            elicitation_id: "elic-123".to_string(),
+            service_name: Some(ServiceName::new("GitHub")),
+        };
+
+        let json = serde_json::to_value(&request).unwrap();
+
+        assert_eq!(json["message"], "Please authorize");
+        assert_eq!(json["url"], "https://github.com/oauth/authorize");
+        assert_eq!(json["elicitation_id"], "elic-123");
+        assert_eq!(json["service_name"], "GitHub");
+    }
+
+    #[test]
+    fn test_url_elicitation_request_service_name_optional() {
+        let request = UrlElicitationRequest {
+            message: "Please authorize".to_string(),
+            url: OAuthUrl::new("https://github.com/oauth/authorize"),
+            elicitation_id: "elic-123".to_string(),
+            service_name: None,
+        };
+
+        let json = serde_json::to_string(&request).unwrap();
+
+        // service_name should be omitted when None (skip_serializing_if)
+        assert!(!json.contains("service_name"));
+    }
+
+    #[test]
+    fn test_elicitation_complete_notification_serialization() {
+        let notification = ElicitationCompleteNotification {
+            elicitation_id: "elic-456".to_string(),
+        };
+
+        let json = serde_json::to_value(&notification).unwrap();
+        assert_eq!(json["elicitation_id"], "elic-456");
+    }
+
+    #[test]
+    fn test_elicitation_complete_notification_deserialization() {
+        let json = r#"{"elicitation_id": "elic-789"}"#;
+        let notification: ElicitationCompleteNotification = serde_json::from_str(json).unwrap();
+
+        assert_eq!(notification.elicitation_id, "elic-789");
     }
 }

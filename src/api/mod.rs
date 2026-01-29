@@ -69,8 +69,10 @@ async fn query_tools(
         .lock()
         .await;
 
+    // Note: REST API currently doesn't support authentication, so we pass None
+    // for user_context. To add auth, extract user from request headers here.
     let selections = orchestrator
-        .query_tools(&query, context)
+        .query_tools(&query, context, None)
         .await
         .map_err(|_e| StatusCode::INTERNAL_SERVER_ERROR)?;
 

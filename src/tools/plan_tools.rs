@@ -125,9 +125,10 @@ impl ToolHandler for PlanToolsHandler {
     fn execute(
         &self,
         args: JsonObject,
-        _ctx: &ToolContext,
-    ) -> Pin<Box<dyn std::future::Future<Output = anyhow::Result<CallToolResult>> + Send + '_>> {
+        ctx: &ToolContext,
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<CallToolResult>> + Send + '_>> {
         let orchestrator = self.orchestrator.clone();
+        let user_context = ctx.user_context.clone();
 
         Box::pin(async move {
             let query = match args.get("query").and_then(|v| v.as_str()) {
@@ -151,7 +152,7 @@ impl ToolHandler for PlanToolsHandler {
             let context_value = args.get("context").cloned();
 
             let plan_result = orchestrator
-                .plan_tools_for_query(&query, context_value)
+                .plan_tools_for_query(&query, context_value, user_context.as_ref())
                 .await;
 
             let mut is_error = false;

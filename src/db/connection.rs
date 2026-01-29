@@ -158,6 +158,65 @@ pub async fn ensure_schema(db: &Db) -> Result<()> {
          DEFINE FIELD expires_at ON TABLE permission TYPE option<datetime>;
          DEFINE INDEX permission_tool_user ON TABLE permission COLUMNS tool_id, user_id;
          DEFINE INDEX permission_service_user ON TABLE permission COLUMNS service_id, user_id;",
+
+        // User table for multi-tenant identity management
+        // Users are identified by external identity (e.g., from JWT, session, API key)
+        "DEFINE TABLE user SCHEMAFULL;
+         DEFINE FIELD external_id ON TABLE user TYPE string;           -- External identity (e.g., sub from JWT)
+         DEFINE FIELD provider ON TABLE user TYPE string;              -- Identity provider (e.g., 'jwt', 'api_key', 'anonymous')
+         DEFINE FIELD email ON TABLE user TYPE option<string>;         -- Optional email for display
+         DEFINE FIELD display_name ON TABLE user TYPE option<string>;  -- Optional display name
+         DEFINE FIELD is_active ON TABLE user TYPE bool DEFAULT true;  -- Can be deactivated without deletion
+         DEFINE FIELD created_at ON TABLE user VALUE time::now();
+         DEFINE FIELD updated_at ON TABLE user VALUE time::now();
+         DEFINE FIELD last_seen_at ON TABLE user TYPE option<datetime>;
+         DEFINE INDEX user_external_id ON TABLE user COLUMNS external_id, provider UNIQUE;",
+
+        // User preferences for per-user settings
+        "DEFINE TABLE user_preferences SCHEMAFULL;
+         DEFINE FIELD user_id ON TABLE user_preferences TYPE record<user>;
+         -- Tool approval settings
+         DEFINE FIELD default_approval_mode ON TABLE user_preferences TYPE string DEFAULT 'prompt';  -- 'prompt', 'allow_known', 'deny_unknown'
+         DEFINE FIELD trusted_services ON TABLE user_preferences TYPE option<array<string>>;         -- Service IDs that don't require approval
+         DEFINE FIELD blocked_services ON TABLE user_preferences TYPE option<array<string>>;         -- Service IDs that are always denied
+         -- Elicitation settings
+         DEFINE FIELD elicitation_timeout_seconds ON TABLE user_preferences TYPE number DEFAULT 300; -- 5 minute timeout
+         DEFINE FIELD remember_decisions ON TABLE user_preferences TYPE bool DEFAULT true;           -- Store 'always allow' decisions
+         -- Notification settings
+         DEFINE FIELD notify_on_tool_execution ON TABLE user_preferences TYPE bool DEFAULT false;
+         DEFINE FIELD notify_on_permission_grant ON TABLE user_preferences TYPE bool DEFAULT true;
+         -- Timestamps
+         DEFINE FIELD created_at ON TABLE user_preferences VALUE time::now();
+         DEFINE FIELD updated_at ON TABLE user_preferences VALUE time::now();
+         DEFINE INDEX user_preferences_user_id ON TABLE user_preferences COLUMNS user_id UNIQUE;",
+
+        // Audit log for security-sensitive operations
+        "DEFINE TABLE audit_log SCHEMAFULL;
+         DEFINE FIELD user_id ON TABLE audit_log TYPE option<string>;    -- May be null for anonymous
+         DEFINE FIELD action ON TABLE audit_log TYPE string;             -- 'tool_executed', 'permission_granted', 'login', etc.
+         DEFINE FIELD resource_type ON TABLE audit_log TYPE string;      -- 'tool', 'service', 'permission', etc.
+         DEFINE FIELD resource_id ON TABLE audit_log TYPE option<string>;
+         DEFINE FIELD details ON TABLE audit_log TYPE option<object>;    -- Additional context
+         DEFINE FIELD ip_address ON TABLE audit_log TYPE option<string>; -- Client IP if available
+         DEFINE FIELD user_agent ON TABLE audit_log TYPE option<string>; -- Client user agent if available
+         DEFINE FIELD created_at ON TABLE audit_log VALUE time::now();
+         DEFINE INDEX audit_log_user_id ON TABLE audit_log COLUMNS user_id;
+         DEFINE INDEX audit_log_action ON TABLE audit_log COLUMNS action;
+         DEFINE INDEX audit_log_created_at ON TABLE audit_log COLUMNS created_at;",
+
+        // API key table for database-backed API key authentication
+        "DEFINE TABLE api_key SCHEMAFULL;
+         DEFINE FIELD key_hash ON TABLE api_key TYPE string;
+         DEFINE FIELD key_prefix ON TABLE api_key TYPE string;
+         DEFINE FIELD user_id ON TABLE api_key TYPE option<record<user>>;
+         DEFINE FIELD name ON TABLE api_key TYPE option<string>;
+         DEFINE FIELD is_active ON TABLE api_key TYPE bool DEFAULT true;
+         DEFINE FIELD expires_at ON TABLE api_key TYPE option<datetime>;
+         DEFINE FIELD scopes ON TABLE api_key TYPE option<array<string>>;
+         DEFINE FIELD created_at ON TABLE api_key VALUE time::now();
+         DEFINE FIELD last_used_at ON TABLE api_key TYPE option<datetime>;
+         DEFINE INDEX api_key_hash ON TABLE api_key COLUMNS key_hash UNIQUE;
+         DEFINE INDEX api_key_prefix ON TABLE api_key COLUMNS key_prefix;",
     ];
 
     for query in schema_queries {

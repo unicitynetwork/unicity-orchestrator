@@ -4,6 +4,8 @@ use std::collections::HashMap;
 use rmcp::model::{Icon, JsonObject};
 use serde_json::Value;
 
+use crate::types::{ApiKeyHash, ApiKeyPrefix};
+
 /// Persisted representation of an MCP service in SurrealDB.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ServiceRecord {
@@ -526,4 +528,236 @@ pub struct PlanStep {
     pub expected_outputs: Vec<String>,
     pub parallel: bool,
     pub dependencies: Vec<u32>,
+}
+
+/// Identity provider types for user authentication.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum IdentityProvider {
+    /// JWT-based authentication (e.g., Auth0, Keycloak)
+    Jwt,
+    /// API key authentication
+    ApiKey,
+    /// Anonymous/guest user (for local single-user mode)
+    Anonymous,
+    /// Custom provider
+    Custom(String),
+}
+
+impl IdentityProvider {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Jwt => "jwt",
+            Self::ApiKey => "api_key",
+            Self::Anonymous => "anonymous",
+            Self::Custom(s) => s,
+        }
+    }
+}
+
+/// Persisted user record for multi-tenant identity management.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserRecord {
+    /// Database identifier
+    pub id: RecordId,
+    /// External identity (e.g., `sub` claim from JWT, API key hash)
+    pub external_id: String,
+    /// Identity provider that authenticated this user
+    pub provider: String,
+    /// Optional email for display
+    pub email: Option<String>,
+    /// Optional display name
+    pub display_name: Option<String>,
+    /// Whether the user is active
+    pub is_active: bool,
+    /// When the user was first seen
+    pub created_at: Option<Datetime>,
+    /// Last update time
+    pub updated_at: Option<Datetime>,
+    /// Last activity time
+    pub last_seen_at: Option<Datetime>,
+}
+
+/// Payload for creating a new user.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserCreate {
+    pub external_id: String,
+    pub provider: String,
+    pub email: Option<String>,
+    pub display_name: Option<String>,
+}
+
+/// Default approval mode for tools.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DefaultApprovalMode {
+    /// Always prompt for approval (most secure)
+    #[default]
+    Prompt,
+    /// Allow tools from known/trusted services without prompting
+    AllowKnown,
+    /// Deny tools from unknown services without prompting
+    DenyUnknown,
+}
+
+/// Persisted user preferences for per-user settings.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UserPreferencesRecord {
+    /// Database identifier
+    pub id: RecordId,
+    /// Reference to the user
+    pub user_id: RecordId,
+    /// Default approval mode for tools
+    pub default_approval_mode: String,
+    /// Service IDs that don't require approval
+    pub trusted_services: Option<Vec<String>>,
+    /// Service IDs that are always denied
+    pub blocked_services: Option<Vec<String>>,
+    /// Elicitation timeout in seconds
+    pub elicitation_timeout_seconds: u32,
+    /// Whether to remember "always allow" decisions
+    pub remember_decisions: bool,
+    /// Whether to notify on tool execution
+    pub notify_on_tool_execution: bool,
+    /// Whether to notify on permission grant
+    pub notify_on_permission_grant: bool,
+    /// When preferences were created
+    pub created_at: Option<Datetime>,
+    /// Last update time
+    pub updated_at: Option<Datetime>,
+}
+
+/// Payload for creating or updating user preferences.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct UserPreferencesUpdate {
+    pub default_approval_mode: Option<String>,
+    pub trusted_services: Option<Vec<String>>,
+    pub blocked_services: Option<Vec<String>>,
+    pub elicitation_timeout_seconds: Option<u32>,
+    pub remember_decisions: Option<bool>,
+    pub notify_on_tool_execution: Option<bool>,
+    pub notify_on_permission_grant: Option<bool>,
+}
+
+/// Audit log action types.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AuditAction {
+    /// User logged in
+    Login,
+    /// User logged out
+    Logout,
+    /// Tool was executed
+    ToolExecuted,
+    /// Permission was granted
+    PermissionGranted,
+    /// Permission was denied
+    PermissionDenied,
+    /// Permission was revoked
+    PermissionRevoked,
+    /// Elicitation was requested
+    ElicitationRequested,
+    /// Elicitation was completed
+    ElicitationCompleted,
+    /// OAuth flow started
+    OAuthStarted,
+    /// OAuth flow completed
+    OAuthCompleted,
+    /// User preferences updated
+    PreferencesUpdated,
+}
+
+impl AuditAction {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Login => "login",
+            Self::Logout => "logout",
+            Self::ToolExecuted => "tool_executed",
+            Self::PermissionGranted => "permission_granted",
+            Self::PermissionDenied => "permission_denied",
+            Self::PermissionRevoked => "permission_revoked",
+            Self::ElicitationRequested => "elicitation_requested",
+            Self::ElicitationCompleted => "elicitation_completed",
+            Self::OAuthStarted => "oauth_started",
+            Self::OAuthCompleted => "oauth_completed",
+            Self::PreferencesUpdated => "preferences_updated",
+        }
+    }
+}
+
+/// Persisted audit log entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditLogRecord {
+    /// Database identifier
+    pub id: RecordId,
+    /// User ID (may be None for anonymous)
+    pub user_id: Option<String>,
+    /// The action that was performed
+    pub action: String,
+    /// Type of resource affected
+    pub resource_type: String,
+    /// ID of the resource affected
+    pub resource_id: Option<String>,
+    /// Additional context
+    pub details: Option<Value>,
+    /// Client IP address
+    pub ip_address: Option<String>,
+    /// Client user agent
+    pub user_agent: Option<String>,
+    /// When the action occurred
+    pub created_at: Option<Datetime>,
+}
+
+/// Payload for creating an audit log entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditLogCreate {
+    pub user_id: Option<String>,
+    pub action: String,
+    pub resource_type: String,
+    pub resource_id: Option<String>,
+    pub details: Option<Value>,
+    pub ip_address: Option<String>,
+    pub user_agent: Option<String>,
+}
+
+/// Persisted API key record for database-backed authentication.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiKeyRecord {
+    /// Database identifier
+    pub id: RecordId,
+    /// SHA-256 hash of the full API key (never store raw keys)
+    pub key_hash: ApiKeyHash,
+    /// First part of the key for display/identification (e.g., "uo_abc12345")
+    pub key_prefix: ApiKeyPrefix,
+    /// Optional reference to the user who owns this key
+    pub user_id: Option<RecordId>,
+    /// Human-readable name for this key
+    pub name: Option<String>,
+    /// Whether the key is active (can be revoked)
+    pub is_active: bool,
+    /// Optional expiration time
+    pub expires_at: Option<Datetime>,
+    /// Optional list of scopes/permissions for this key
+    pub scopes: Option<Vec<String>>,
+    /// When the key was created
+    pub created_at: Option<Datetime>,
+    /// Last time the key was used for authentication
+    pub last_used_at: Option<Datetime>,
+}
+
+/// Payload for creating a new API key.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiKeyCreate {
+    /// SHA-256 hash of the full API key
+    pub key_hash: ApiKeyHash,
+    /// First part of the key for display/identification
+    pub key_prefix: ApiKeyPrefix,
+    /// Optional reference to the user who owns this key
+    pub user_id: Option<RecordId>,
+    /// Human-readable name for this key
+    pub name: Option<String>,
+    /// Optional expiration time
+    pub expires_at: Option<Datetime>,
+    /// Optional list of scopes/permissions for this key
+    pub scopes: Option<Vec<String>>,
 }

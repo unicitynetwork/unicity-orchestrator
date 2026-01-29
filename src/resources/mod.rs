@@ -15,6 +15,7 @@ use rmcp::model::{
 };
 use anyhow::Result;
 use crate::db::Db;
+use crate::types::{ResourceUri, ServiceId, ServiceName};
 
 /// Default page size for paginated resource listings.
 const DEFAULT_PAGE_SIZE: usize = 100;
@@ -25,7 +26,7 @@ const MAX_URI_LENGTH: usize = 4096;
 /// A discovered resource from an MCP service.
 #[derive(Clone, Debug)]
 pub struct DiscoveredResource {
-    pub uri: String,
+    pub uri: ResourceUri,
     pub name: String,
     pub title: Option<String>,
     pub description: Option<String>,
@@ -33,8 +34,8 @@ pub struct DiscoveredResource {
     pub size: Option<u32>,
     pub icons: Option<Vec<Icon>>,
     pub annotations: Option<Annotations>,
-    pub service_id: String,
-    pub service_name: String,
+    pub service_id: ServiceId,
+    pub service_name: ServiceName,
 }
 
 /// A discovered resource template from an MCP service.
@@ -46,8 +47,8 @@ pub struct DiscoveredResourceTemplate {
     pub description: Option<String>,
     pub mime_type: Option<String>,
     pub annotations: Option<Annotations>,
-    pub service_id: String,
-    pub service_name: String,
+    pub service_id: ServiceId,
+    pub service_name: ServiceName,
 }
 
 /// Error types for resource operations.
@@ -101,10 +102,10 @@ fn is_valid_uri(uri: &str) -> bool {
 /// Registry for managing discovered resources from MCP services.
 #[derive(Clone)]
 pub struct ResourceRegistry {
-    /// Key: URI, Value: (service_id, original resource data)
-    resources: HashMap<String, (String, DiscoveredResource)>,
+    /// Key: URI string, Value: (service_id, original resource data)
+    resources: HashMap<String, (ServiceId, DiscoveredResource)>,
     /// Track which services have each resource URI
-    resource_to_services: HashMap<String, Vec<String>>,
+    resource_to_services: HashMap<String, Vec<ServiceId>>,
     /// Store discovered resource templates
     templates: Vec<DiscoveredResourceTemplate>,
 }
@@ -122,7 +123,7 @@ impl ResourceRegistry {
     /// Register a discovered resource.
     pub fn register(&mut self, resource: DiscoveredResource) {
         let service_id = resource.service_id.clone();
-        let uri = resource.uri.clone();
+        let uri = resource.uri.to_string();
 
         // Track which services have this resource
         self.resource_to_services
@@ -131,8 +132,8 @@ impl ResourceRegistry {
             .push(service_id.clone());
 
         // Store the resource (using the first service's version)
-        self.resources.entry(uri.clone())
-            .or_insert_with(|| (service_id.clone(), resource));
+        self.resources.entry(uri)
+            .or_insert_with(|| (service_id, resource));
     }
 
     /// Register a discovered resource template.
@@ -155,7 +156,7 @@ impl ResourceRegistry {
 
     /// Resolve a resource URI to its entry.
     /// Returns the service_id and the original URI.
-    pub fn resolve(&self, uri: &str) -> Option<(String, String)> {
+    pub fn resolve(&self, uri: &str) -> Option<(ServiceId, String)> {
         if let Some((service_id, _)) = self.resources.get(uri) {
             return Some((service_id.clone(), uri.to_string()));
         }
@@ -234,7 +235,7 @@ impl ResourceForwarder {
             .into_iter()
             .filter(|r| {
                 if let Some(ref filter) = filter_lower {
-                    r.service_name.to_lowercase() == *filter
+                    r.service_name.as_str().to_lowercase() == *filter
                 } else {
                     true
                 }
@@ -247,14 +248,14 @@ impl ResourceForwarder {
             .skip(offset)
             .take(DEFAULT_PAGE_SIZE)
             .map(|r| {
-                let namespaced_name = format!("{}:{}", r.service_name, r.name);
+                let namespaced_name = format!("{}:{}", r.service_name.as_str(), r.name);
                 let description = r.description.clone().unwrap_or_else(|| {
-                    format!("Resource from {}", r.service_name)
+                    format!("Resource from {}", r.service_name.as_str())
                 });
-                let description_with_provenance = format!("{} [from {}]", description, r.service_name);
+                let description_with_provenance = format!("{} [from {}]", description, r.service_name.as_str());
 
                 RawResource {
-                    uri: r.uri,
+                    uri: r.uri.to_string(),
                     name: namespaced_name,
                     title: r.title,
                     description: Some(description_with_provenance),
@@ -305,8 +306,8 @@ impl ResourceForwarder {
             let registry = self.registry.lock().await;
             let found = registry.list_resources()
                 .into_iter()
-                .find(|r| r.service_name.to_lowercase() == service_name && r.name.to_lowercase() == resource_name)
-                .map(|r| r.uri);
+                .find(|r| r.service_name.as_str().to_lowercase() == service_name && r.name.to_lowercase() == resource_name)
+                .map(|r| r.uri.to_string());
             drop(registry);
 
             match found {
@@ -334,7 +335,7 @@ impl ResourceForwarder {
 
         // Forward the request to the appropriate service
         let services = self.running_services.lock().await;
-        let service = services.get(&service_id)
+        let service = services.get(service_id.as_str())
             .ok_or_else(|| ResourceError::Internal(format!("Service not found: {}", service_id)))?;
 
         // Read the actual resource contents
@@ -375,7 +376,7 @@ impl ResourceForwarder {
             .into_iter()
             .filter(|t| {
                 if let Some(ref filter) = filter_lower {
-                    t.service_name.to_lowercase() == *filter
+                    t.service_name.as_str().to_lowercase() == *filter
                 } else {
                     true
                 }
@@ -388,11 +389,11 @@ impl ResourceForwarder {
             .skip(offset)
             .take(DEFAULT_PAGE_SIZE)
             .map(|t| {
-                let namespaced_name = format!("{}:{}", t.service_name, t.name);
+                let namespaced_name = format!("{}:{}", t.service_name.as_str(), t.name);
                 let description = t.description.clone().unwrap_or_else(|| {
-                    format!("Resource template from {}", t.service_name)
+                    format!("Resource template from {}", t.service_name.as_str())
                 });
-                let description_with_provenance = format!("{} [from {}]", description, t.service_name);
+                let description_with_provenance = format!("{} [from {}]", description, t.service_name.as_str());
 
                 RawResourceTemplate {
                     uri_template: t.uri_template,
@@ -468,7 +469,7 @@ impl ResourceForwarder {
         for resource in list_result.resources {
             // resource is Annotated<RawResource>, deref gives RawResource fields
             registry.register(DiscoveredResource {
-                uri: resource.uri.clone(),
+                uri: ResourceUri::new(resource.uri.clone()),
                 name: resource.name.clone(),
                 title: resource.title.clone(),
                 description: resource.description.clone(),
@@ -476,8 +477,8 @@ impl ResourceForwarder {
                 size: resource.size,
                 icons: resource.icons.clone(),
                 annotations: resource.annotations.clone(),
-                service_id: service_id.to_string(),
-                service_name: service_name.clone(),
+                service_id: ServiceId::new(service_id),
+                service_name: ServiceName::new(service_name.clone()),
             });
             count += 1;
         }
@@ -493,8 +494,8 @@ impl ResourceForwarder {
                     description: template.description.clone(),
                     mime_type: template.mime_type.clone(),
                     annotations: template.annotations.clone(),
-                    service_id: service_id.to_string(),
-                    service_name: service_name.clone(),
+                    service_id: ServiceId::new(service_id),
+                    service_name: ServiceName::new(service_name.clone()),
                 });
             }
         }
@@ -535,7 +536,7 @@ mod tests {
     /// Create a mock DiscoveredResource for testing.
     fn mock_resource(service_name: &str, uri: &str, name: &str) -> DiscoveredResource {
         DiscoveredResource {
-            uri: uri.to_string(),
+            uri: ResourceUri::new(uri),
             name: name.to_string(),
             title: Some(format!("{} Resource", name)),
             description: Some(format!("A test resource: {}", name)),
@@ -543,8 +544,8 @@ mod tests {
             size: None,
             icons: None,
             annotations: None,
-            service_id: format!("service:{}", service_name),
-            service_name: service_name.to_string(),
+            service_id: ServiceId::new(format!("service:{}", service_name)),
+            service_name: ServiceName::new(service_name),
         }
     }
 
@@ -603,7 +604,7 @@ mod tests {
 
         let result = registry.resolve("file:///main.rs");
         assert!(result.is_some());
-        assert_eq!(result.unwrap().0, "service:github");
+        assert_eq!(result.unwrap().0.as_str(), "service:github");
     }
 
     #[test]
@@ -650,8 +651,8 @@ mod tests {
             description: Some("A file from a git repo".to_string()),
             mime_type: Some("text/plain".to_string()),
             annotations: None,
-            service_id: "service:github".to_string(),
-            service_name: "github".to_string(),
+            service_id: ServiceId::new("service:github"),
+            service_name: ServiceName::new("github"),
         };
 
         registry.register_template(template.clone());
@@ -838,8 +839,8 @@ mod tests {
                 description: Some("A file template".to_string()),
                 mime_type: Some("text/plain".to_string()),
                 annotations: None,
-                service_id: "service:filesystem".to_string(),
-                service_name: "filesystem".to_string(),
+                service_id: ServiceId::new("service:filesystem"),
+                service_name: ServiceName::new("filesystem"),
             });
             reg.register_template(DiscoveredResourceTemplate {
                 uri_template: "git://{repo}/file/{path}".to_string(),
@@ -848,8 +849,8 @@ mod tests {
                 description: Some("A file from git".to_string()),
                 mime_type: Some("text/plain".to_string()),
                 annotations: None,
-                service_id: "service:github".to_string(),
-                service_name: "github".to_string(),
+                service_id: ServiceId::new("service:github"),
+                service_name: ServiceName::new("github"),
             });
         }
 

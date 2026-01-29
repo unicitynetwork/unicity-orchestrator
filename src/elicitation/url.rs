@@ -56,7 +56,7 @@ impl UrlHandler {
         }
 
         // Validate URL format
-        let parsed = ::url::Url::parse(&request.url)
+        let parsed = ::url::Url::parse(request.url.as_str())
             .map_err(|_| ElicitationError::InvalidSchema("Invalid URL format".to_string()))?;
 
         // Ensure HTTPS for production (allow HTTP for development)
@@ -97,10 +97,10 @@ impl UrlHandler {
 
         let state = OAuthState {
             elicitation_id: elicitation_id.clone(),
-            user_id: user_id.to_string(),
-            provider: provider.to_string(),
+            user_id: crate::types::ExternalUserId::new(user_id),
+            provider: crate::types::IdentityProvider::new(provider),
             state_token: state_token.clone(),
-            redirect_uri: redirect_uri.to_string(),
+            redirect_uri: crate::types::RedirectUri::new(redirect_uri),
             expires_at: chrono::Utc::now() + chrono::Duration::seconds(ttl_seconds as i64),
         };
 
@@ -146,9 +146,9 @@ impl UrlHandler {
 
         let request = UrlElicitationRequest {
             message: message.to_string(),
-            url: connect_url.clone(),
+            url: crate::types::OAuthUrl::new(connect_url.clone()),
             elicitation_id: elicitation_id.clone(),
-            service_name: Some(provider.to_string()),
+            service_name: Some(crate::types::ServiceName::new(provider)),
         };
 
         Ok((request, elicitation_id))
@@ -193,7 +193,7 @@ mod tests {
 
         let valid_request = UrlElicitationRequest {
             message: "Please authorize".to_string(),
-            url: "https://example.com/auth".to_string(),
+            url: crate::types::OAuthUrl::new("https://example.com/auth"),
             elicitation_id: "test-id".to_string(),
             service_name: None,
         };
@@ -203,7 +203,7 @@ mod tests {
         // Empty URL
         let invalid_request = UrlElicitationRequest {
             message: "Please authorize".to_string(),
-            url: "".to_string(),
+            url: crate::types::OAuthUrl::new(""),
             elicitation_id: "test-id".to_string(),
             service_name: None,
         };
@@ -242,8 +242,8 @@ mod tests {
             "Please authorize with GitHub"
         ).unwrap();
 
-        assert!(request.url.contains("/oauth/connect/github"));
-        assert_eq!(request.service_name, Some("github".to_string()));
+        assert!(request.url.as_str().contains("/oauth/connect/github"));
+        assert_eq!(request.service_name.map(|s| s.to_string()), Some("github".to_string()));
         assert!(id.starts_with("elicitation-"));
     }
 }

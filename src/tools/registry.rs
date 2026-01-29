@@ -12,6 +12,8 @@ use rmcp::service::RequestContext;
 use rmcp::RoleServer;
 use anyhow::Result;
 
+use crate::auth::UserContext;
+
 /// Pagination constants for tools.
 const DEFAULT_PAGE_SIZE: usize = 100;
 const MAX_PAGE_SIZE: usize = 1000;
@@ -21,6 +23,8 @@ const MAX_PAGE_SIZE: usize = 1000;
 pub struct ToolContext {
     /// Request context from rmcp (for session info, etc.)
     pub request_context: RequestContext<RoleServer>,
+    /// User context for multi-tenant isolation (None for anonymous/stdio mode)
+    pub user_context: Option<UserContext>,
 }
 
 /// Trait for handling MCP tool invocations.
