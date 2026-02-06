@@ -66,28 +66,28 @@ mod provenance;
 mod store;
 mod url;
 
-pub use approval::{ApprovalManager, ApprovalAction, ApprovalRequest, PermissionStatus, ToolPermission};
-pub use error::{ElicitationError, ElicitationResult, URL_ELICITATION_REQUIRED_ERROR_CODE};
+pub use approval::{
+    ApprovalAction, ApprovalManager, ApprovalRequest, PermissionStatus, ToolPermission,
+};
+pub use error::{ElicitationError, ElicitationResult};
 pub use form::FormHandler;
-pub use provenance::{wrap_with_provenance, wrap_url_with_provenance};
+pub use provenance::{wrap_url_with_provenance, wrap_with_provenance};
 pub use store::PermissionStore;
 pub use url::UrlHandler;
 
 // Re-export rmcp elicitation types for external use
 pub use rmcp::model::{
-    ElicitationAction, ElicitationSchema,
-    CreateElicitationRequestParams, CreateElicitationResult,
-    StringFormat,
-    PrimitiveSchema,
+    CreateElicitationRequestParams, CreateElicitationResult, ElicitationAction, ElicitationSchema,
+    PrimitiveSchema, StringFormat,
 };
 
 use crate::types::{OAuthUrl, ServiceName};
+use anyhow::Result;
 use rmcp::model::ClientCapabilities;
 use rmcp::service::{Peer, RoleServer};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use anyhow::Result;
 
 /// Policy for handling tool execution when the client doesn't support elicitation.
 ///
@@ -332,7 +332,8 @@ impl ElicitationCoordinator {
         message: impl Into<String>,
         schema: ElicitationSchema,
     ) -> ElicitationResult<CreateElicitationResult> {
-        self.create_elicitation_internal(message.into(), schema).await
+        self.create_elicitation_internal(message.into(), schema)
+            .await
     }
 
     /// Forward a form-mode elicitation request from a downstream MCP service to the client.
@@ -356,7 +357,8 @@ impl ElicitationCoordinator {
         service_name: &str,
     ) -> ElicitationResult<CreateElicitationResult> {
         let wrapped_message = wrap_with_provenance(message, service_name);
-        self.create_elicitation_internal(wrapped_message, schema).await
+        self.create_elicitation_internal(wrapped_message, schema)
+            .await
     }
 
     /// Forward a URL-mode elicitation request from a downstream MCP service.
@@ -400,10 +402,7 @@ impl ElicitationCoordinator {
     /// # Returns
     /// * `Ok(())` - If the elicitation was found and marked complete
     /// * `Err` - If the elicitation was not found or already consumed
-    pub async fn complete_url_elicitation(
-        &self,
-        elicitation_id: &str,
-    ) -> ElicitationResult<()> {
+    pub async fn complete_url_elicitation(&self, elicitation_id: &str) -> ElicitationResult<()> {
         tracing::info!(
             elicitation_id = elicitation_id,
             "URL-mode elicitation completed"
@@ -432,7 +431,11 @@ impl ElicitationCoordinator {
         );
 
         // Clean up the OAuth state if this was a URL-mode elicitation
-        if let Err(e) = self.url_handler.complete_oauth_flow(&notification.elicitation_id).await {
+        if let Err(e) = self
+            .url_handler
+            .complete_oauth_flow(&notification.elicitation_id)
+            .await
+        {
             // Log but don't fail - the elicitation may have already been consumed
             // or may have been a form-mode elicitation
             tracing::debug!(
@@ -453,12 +456,15 @@ impl ElicitationCoordinator {
     ) -> ElicitationResult<CreateElicitationResult> {
         // Check if client supports elicitation
         if !self.client_supports_elicitation().await {
-            return Err(ElicitationError::UnsupportedMode("Client does not support elicitation".to_string()));
+            return Err(ElicitationError::UnsupportedMode(
+                "Client does not support elicitation".to_string(),
+            ));
         }
 
         // Get the peer
         let peer_guard = self.peer.read().await;
-        let peer = peer_guard.as_ref()
+        let peer = peer_guard
+            .as_ref()
             .ok_or_else(|| ElicitationError::Internal("No peer connected".to_string()))?;
 
         // Create the request parameters
@@ -469,9 +475,9 @@ impl ElicitationCoordinator {
         };
 
         // Send the elicitation request
-        let result = peer.create_elicitation(params)
-            .await
-            .map_err(|e| ElicitationError::Internal(format!("Elicitation request failed: {:?}", e)))?;
+        let result = peer.create_elicitation(params).await.map_err(|e| {
+            ElicitationError::Internal(format!("Elicitation request failed: {:?}", e))
+        })?;
 
         Ok(result)
     }
@@ -492,7 +498,6 @@ mod tests {
         crate::db::create_connection(db_config).await.unwrap()
     }
 
-
     #[test]
     fn test_elicitation_mode_as_str() {
         assert_eq!(ElicitationMode::Form.as_str(), "form");
@@ -501,7 +506,10 @@ mod tests {
 
     #[test]
     fn test_elicitation_mode_from_str_valid() {
-        assert_eq!(ElicitationMode::from_str("form"), Some(ElicitationMode::Form));
+        assert_eq!(
+            ElicitationMode::from_str("form"),
+            Some(ElicitationMode::Form)
+        );
         assert_eq!(ElicitationMode::from_str("url"), Some(ElicitationMode::Url));
     }
 
@@ -563,9 +571,18 @@ mod tests {
 
     #[test]
     fn test_elicitation_action_serialization() {
-        assert_eq!(serde_json::to_string(&ElicitationAction::Accept).unwrap(), "\"accept\"");
-        assert_eq!(serde_json::to_string(&ElicitationAction::Decline).unwrap(), "\"decline\"");
-        assert_eq!(serde_json::to_string(&ElicitationAction::Cancel).unwrap(), "\"cancel\"");
+        assert_eq!(
+            serde_json::to_string(&ElicitationAction::Accept).unwrap(),
+            "\"accept\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ElicitationAction::Decline).unwrap(),
+            "\"decline\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ElicitationAction::Cancel).unwrap(),
+            "\"cancel\""
+        );
     }
 
     #[tokio::test]
@@ -573,18 +590,22 @@ mod tests {
         let db = setup_test_db().await;
         let coordinator = ElicitationCoordinator::new(db).unwrap();
 
-        assert_eq!(coordinator.fallback_policy().await, ElicitationFallbackPolicy::Deny);
+        assert_eq!(
+            coordinator.fallback_policy().await,
+            ElicitationFallbackPolicy::Deny
+        );
     }
 
     #[tokio::test]
     async fn test_coordinator_new_with_policy_sets_policy() {
         let db = setup_test_db().await;
-        let coordinator = ElicitationCoordinator::new_with_policy(
-            db,
-            ElicitationFallbackPolicy::Allow,
-        ).unwrap();
+        let coordinator =
+            ElicitationCoordinator::new_with_policy(db, ElicitationFallbackPolicy::Allow).unwrap();
 
-        assert_eq!(coordinator.fallback_policy().await, ElicitationFallbackPolicy::Allow);
+        assert_eq!(
+            coordinator.fallback_policy().await,
+            ElicitationFallbackPolicy::Allow
+        );
     }
 
     #[tokio::test]
@@ -593,15 +614,28 @@ mod tests {
         let coordinator = ElicitationCoordinator::new(db).unwrap();
 
         // Default is Deny
-        assert_eq!(coordinator.fallback_policy().await, ElicitationFallbackPolicy::Deny);
+        assert_eq!(
+            coordinator.fallback_policy().await,
+            ElicitationFallbackPolicy::Deny
+        );
 
         // Change to Allow
-        coordinator.set_fallback_policy(ElicitationFallbackPolicy::Allow).await;
-        assert_eq!(coordinator.fallback_policy().await, ElicitationFallbackPolicy::Allow);
+        coordinator
+            .set_fallback_policy(ElicitationFallbackPolicy::Allow)
+            .await;
+        assert_eq!(
+            coordinator.fallback_policy().await,
+            ElicitationFallbackPolicy::Allow
+        );
 
         // Change back to Deny
-        coordinator.set_fallback_policy(ElicitationFallbackPolicy::Deny).await;
-        assert_eq!(coordinator.fallback_policy().await, ElicitationFallbackPolicy::Deny);
+        coordinator
+            .set_fallback_policy(ElicitationFallbackPolicy::Deny)
+            .await;
+        assert_eq!(
+            coordinator.fallback_policy().await,
+            ElicitationFallbackPolicy::Deny
+        );
     }
 
     #[tokio::test]
@@ -620,9 +654,7 @@ mod tests {
         let coordinator = ElicitationCoordinator::new(db).unwrap();
 
         // Set capabilities with elicitation enabled
-        let capabilities = ClientCapabilities::builder()
-            .enable_elicitation()
-            .build();
+        let capabilities = ClientCapabilities::builder().enable_elicitation().build();
         coordinator.set_client_capabilities(&capabilities).await;
 
         assert!(coordinator.client_supports_elicitation().await);
@@ -659,7 +691,6 @@ mod tests {
         let store = coordinator.store();
         assert!(Arc::strong_count(store) >= 1);
     }
-
 
     #[test]
     fn test_url_elicitation_request_serialization() {

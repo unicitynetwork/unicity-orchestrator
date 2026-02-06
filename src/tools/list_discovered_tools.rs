@@ -3,15 +3,15 @@
 //! Debug tool for listing all discovered MCP service tools.
 //! Not intended for LLM use - use `unicity.select_tool` for semantic search instead.
 
-use std::pin::Pin;
-use std::future::Future;
-use std::sync::Arc;
-use rmcp::model::{CallToolResult, Content, JsonObject};
-use serde_json::json;
 use crate::db::ToolRecord;
 use crate::orchestrator::Orchestrator;
 use crate::orchestrator::user_filter::UserToolFilter;
-use crate::tools::{ToolHandler, ToolContext};
+use crate::tools::{ToolContext, ToolHandler};
+use rmcp::model::{CallToolResult, Content, JsonObject};
+use serde_json::json;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
 
 /// Handler for the `unicity.debug.list_tools` debug tool.
 pub struct ListDiscoveredToolsHandler {
@@ -116,21 +116,14 @@ impl ToolHandler for ListDiscoveredToolsHandler {
                 .get("include_blocked")
                 .and_then(|v| v.as_bool())
                 .unwrap_or(true);
-            let limit = args
-                .get("limit")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(100) as usize;
-            let offset = args
-                .get("offset")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0) as usize;
+            let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(100) as usize;
+            let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
 
             // Load user's filter to determine blocked/trusted status
             let filter = match &user_context {
-                Some(ctx) => {
-                    UserToolFilter::from_user_context(orchestrator.db(), ctx).await
-                        .unwrap_or_else(|_| UserToolFilter::allow_all())
-                }
+                Some(ctx) => UserToolFilter::from_user_context(orchestrator.db(), ctx)
+                    .await
+                    .unwrap_or_else(|_| UserToolFilter::allow_all()),
                 None => UserToolFilter::allow_all(),
             };
 

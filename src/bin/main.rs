@@ -1,8 +1,8 @@
-use clap::{Parser, Subcommand};
 use anyhow::Result;
-use tokio::sync::Mutex;
+use clap::{Parser, Subcommand};
 use std::sync::Arc;
-use tracing::{info, Level};
+use tokio::sync::Mutex;
+use tracing::{Level, info};
 use tracing_subscriber::EnvFilter;
 use unicity_orchestrator::{AuthConfig, DatabaseConfig, Orchestrator, create_server};
 
@@ -119,7 +119,11 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Server { port, admin_bind, db_url } => {
+        Commands::Server {
+            port,
+            admin_bind,
+            db_url,
+        } => {
             info!("Starting orchestrator server on port {}", port);
             info!("Starting admin API on {}", admin_bind);
 
@@ -165,12 +169,12 @@ async fn main() -> Result<()> {
 
             let orchestrator = Orchestrator::new(DatabaseConfig::default()).await?;
 
-            let context_value = context
-                .map(|c| serde_json::from_str(&c).ok())
-                .flatten();
+            let context_value = context.and_then(|c| serde_json::from_str(&c).ok());
 
             // CLI query runs without user context (anonymous mode)
-            let selections = orchestrator.query_tools(&query, context_value, None).await?;
+            let selections = orchestrator
+                .query_tools(&query, context_value, None)
+                .await?;
 
             println!("Query: {}", query);
             println!("Found {} tool selections:", selections.len());
@@ -198,7 +202,9 @@ async fn main() -> Result<()> {
             let server = create_server(db_config).await?;
 
             // Run as an MCP stdio server. McpServer implements ServerHandler.
-            let service = server.as_ref().clone()
+            let service = server
+                .as_ref()
+                .clone()
                 .serve(stdio())
                 .await
                 .inspect_err(|e| tracing::error!("serving error: {:?}", e))?;
@@ -290,7 +296,7 @@ async fn main() -> Result<()> {
                 key_prefix: prefix.clone(),
                 user_id: None,
                 name: name.clone(),
-                expires_at: expires_at.map(|dt| surrealdb::sql::Datetime::from(dt)),
+                expires_at: expires_at.map(surrealdb::sql::Datetime::from),
                 scopes: scopes_vec,
             };
 
@@ -312,7 +318,10 @@ async fn main() -> Result<()> {
             println!("IMPORTANT: Save this key now. It cannot be retrieved later.");
             println!("Use with: -H 'X-API-Key: {}'", full_key);
         }
-        Commands::ListApiKeys { db_url, active_only } => {
+        Commands::ListApiKeys {
+            db_url,
+            active_only,
+        } => {
             let db_config = DatabaseConfig {
                 url: db_url,
                 ..Default::default()
@@ -331,22 +340,28 @@ async fn main() -> Result<()> {
                 return Ok(());
             }
 
-            println!("{:<20} {:<20} {:<10} {:<25} {:<25}",
-                "PREFIX", "NAME", "STATUS", "CREATED", "LAST USED");
+            println!(
+                "{:<20} {:<20} {:<10} {:<25} {:<25}",
+                "PREFIX", "NAME", "STATUS", "CREATED", "LAST USED"
+            );
             println!("{}", "-".repeat(100));
 
             for key in api_keys {
                 let status = if key.is_active { "Active" } else { "Revoked" };
                 let name = key.name.unwrap_or_else(|| "-".to_string());
-                let created = key.created_at
+                let created = key
+                    .created_at
                     .map(|dt| dt.to_string())
                     .unwrap_or_else(|| "-".to_string());
-                let last_used = key.last_used_at
+                let last_used = key
+                    .last_used_at
                     .map(|dt| dt.to_string())
                     .unwrap_or_else(|| "Never".to_string());
 
-                println!("{:<20} {:<20} {:<10} {:<25} {:<25}",
-                    key.key_prefix, name, status, created, last_used);
+                println!(
+                    "{:<20} {:<20} {:<10} {:<25} {:<25}",
+                    key.key_prefix, name, status, created, last_used
+                );
             }
         }
         Commands::RevokeApiKey { key_prefix, db_url } => {
@@ -357,7 +372,11 @@ async fn main() -> Result<()> {
             let db = unicity_orchestrator::create_connection(db_config).await?;
             unicity_orchestrator::ensure_schema(&db).await?;
 
-            let revoked = unicity_orchestrator::db::QueryBuilder::deactivate_api_key_by_prefix(&db, &key_prefix).await?;
+            let revoked = unicity_orchestrator::db::QueryBuilder::deactivate_api_key_by_prefix(
+                &db,
+                &key_prefix,
+            )
+            .await?;
 
             if revoked {
                 println!("API key '{}' has been revoked.", key_prefix);
@@ -388,8 +407,10 @@ fn build_auth_config(
         return None;
     }
 
-    let mut config = AuthConfig::default();
-    config.allow_anonymous = allow_anonymous;
+    let mut config = AuthConfig {
+        allow_anonymous,
+        ..Default::default()
+    };
 
     // Configure static API key if provided
     if let Some(key) = api_key {
@@ -414,7 +435,9 @@ fn build_auth_config(
 
     // Warn if no auth methods configured but anonymous is disabled
     if !has_api_key && !has_jwt && !allow_anonymous && !enable_db_api_keys {
-        tracing::warn!("No authentication method configured and anonymous access disabled - all requests will be rejected");
+        tracing::warn!(
+            "No authentication method configured and anonymous access disabled - all requests will be rejected"
+        );
     }
 
     Some(config)

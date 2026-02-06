@@ -49,7 +49,9 @@ impl ProvenanceWrapper {
 
         tracing::info!(
             "URL mode elicitation from service '{}' ({}) to {}",
-            service_name, service_id, request.url
+            service_name,
+            service_id,
+            request.url
         );
 
         UrlElicitationRequest {
@@ -105,7 +107,10 @@ mod tests {
 
         assert!(wrapped.message.starts_with("[github]"));
         assert_eq!(wrapped.url.as_str(), "https://github.com/login/oauth");
-        assert_eq!(wrapped.service_name.map(|s| s.to_string()), Some("github".to_string()));
+        assert_eq!(
+            wrapped.service_name.map(|s| s.to_string()),
+            Some("github".to_string())
+        );
     }
 
     #[test]
@@ -129,6 +134,9 @@ mod tests {
         let wrapped = wrap_url_with_provenance(request, "github", "service:github");
 
         assert!(wrapped.message.starts_with("[github]"));
-        assert_eq!(wrapped.service_name.map(|s| s.to_string()), Some("github".to_string()));
+        assert_eq!(
+            wrapped.service_name.map(|s| s.to_string()),
+            Some("github".to_string())
+        );
     }
 }

@@ -34,6 +34,6 @@ pub mod jwks;
 mod user_store;
 
 pub use context::UserContext;
-pub use extractor::{generate_api_key, hash_api_key, AuthConfig, AuthError, AuthExtractor};
-pub use jwks::{JwksCache, JwksCacheError, DEFAULT_CACHE_TTL_SECONDS};
+pub use extractor::{AuthConfig, AuthError, AuthExtractor, generate_api_key, hash_api_key};
+pub use jwks::{DEFAULT_CACHE_TTL_SECONDS, JwksCache, JwksCacheError};
 pub use user_store::UserStore;

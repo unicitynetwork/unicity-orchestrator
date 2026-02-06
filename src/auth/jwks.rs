@@ -100,25 +100,21 @@ impl JwksCache {
         };
 
         // Try to get from cache first
-        if !should_refresh {
-            if let Some(key) = self.get_from_cache(kid).await {
-                return Ok(key);
-            }
+        if !should_refresh && let Some(key) = self.get_from_cache(kid).await {
+            return Ok(key);
         }
 
         // Need to refresh or key not found
         match self.fetch_keys().await {
             Ok(()) => {
                 // Try to get the key again after refresh
-                self.get_from_cache(kid)
-                    .await
-                    .ok_or_else(|| {
-                        if let Some(k) = kid {
-                            JwksCacheError::KeyNotFound(k.to_string())
-                        } else {
-                            JwksCacheError::NoKeysAvailable
-                        }
-                    })
+                self.get_from_cache(kid).await.ok_or_else(|| {
+                    if let Some(k) = kid {
+                        JwksCacheError::KeyNotFound(k.to_string())
+                    } else {
+                        JwksCacheError::NoKeysAvailable
+                    }
+                })
             }
             Err(e) => {
                 // Fetch failed - try stale cache if allowed
@@ -233,19 +229,19 @@ impl JwksCache {
     /// Convert a JWK to a jsonwebtoken DecodingKey.
     fn jwk_to_decoding_key(jwk: &Jwk) -> Result<DecodingKey, JwksCacheError> {
         // Try X.509 certificate first
-        if let Some(x5c) = &jwk.x5c {
-            if let Some(cert) = x5c.first() {
-                // x5c contains base64-encoded (not URL-safe) DER certificates
-                let cert_der = base64::engine::general_purpose::STANDARD
-                    .decode(cert)
-                    .map_err(|e| JwksCacheError::ParseError(format!("Invalid x5c: {}", e)))?;
+        if let Some(x5c) = &jwk.x5c
+            && let Some(cert) = x5c.first()
+        {
+            // x5c contains base64-encoded (not URL-safe) DER certificates
+            let cert_der = base64::engine::general_purpose::STANDARD
+                .decode(cert)
+                .map_err(|e| JwksCacheError::ParseError(format!("Invalid x5c: {}", e)))?;
 
-                // from_rsa_der doesn't return Result, use from_rsa_pem with proper conversion
-                // or use from_rsa_components instead - x5c is actually a certificate, not raw key
-                // For proper x5c handling, we'd need to extract the public key from the cert
-                // For now, prefer n/e components which are more common in JWKS
-                return Ok(DecodingKey::from_rsa_der(&cert_der));
-            }
+            // from_rsa_der doesn't return Result, use from_rsa_pem with proper conversion
+            // or use from_rsa_components instead - x5c is actually a certificate, not raw key
+            // For proper x5c handling, we'd need to extract the public key from the cert
+            // For now, prefer n/e components which are more common in JWKS
+            return Ok(DecodingKey::from_rsa_der(&cert_der));
         }
 
         // Fall back to n and e (most common case)

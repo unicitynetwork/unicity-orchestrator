@@ -4,18 +4,16 @@
 //! When multiple services define resources with conflicting URIs, the orchestrator provides
 //! clear resolution options.
 
+use crate::db::Db;
+use crate::types::{ResourceUri, ServiceId, ServiceName};
+use anyhow::Result;
+use rmcp::model::{
+    AnnotateAble, Annotations, Icon, ListResourceTemplatesResult, ListResourcesResult, RawResource,
+    RawResourceTemplate, ReadResourceRequestParams, ReadResourceResult,
+};
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use rmcp::model::{
-    RawResource, ReadResourceRequestParams,
-    ListResourcesResult, ReadResourceResult,
-    ListResourceTemplatesResult, RawResourceTemplate,
-    AnnotateAble, Annotations, Icon,
-};
-use anyhow::Result;
-use crate::db::Db;
-use crate::types::{ResourceUri, ServiceId, ServiceName};
 
 /// Default page size for paginated resource listings.
 const DEFAULT_PAGE_SIZE: usize = 100;
@@ -128,11 +126,12 @@ impl ResourceRegistry {
         // Track which services have this resource
         self.resource_to_services
             .entry(uri.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(service_id.clone());
 
         // Store the resource (using the first service's version)
-        self.resources.entry(uri)
+        self.resources
+            .entry(uri)
             .or_insert_with(|| (service_id, resource));
     }
 
@@ -190,7 +189,8 @@ impl Default for ResourceRegistry {
 /// Handles resource forwarding to discovered MCP services.
 pub struct ResourceForwarder {
     pub(crate) registry: Arc<Mutex<ResourceRegistry>>,
-    pub(crate) running_services: Arc<Mutex<HashMap<String, Arc<crate::mcp_client::RunningService>>>>,
+    pub(crate) running_services:
+        Arc<Mutex<HashMap<String, Arc<crate::mcp_client::RunningService>>>>,
     /// Database reference for querying service metadata.
     db: Db,
 }
@@ -226,9 +226,7 @@ impl ResourceForwarder {
         let filter_lower = service_filter.map(|s| s.to_lowercase());
 
         // Parse cursor to get offset
-        let offset = cursor
-            .and_then(|c| c.parse::<usize>().ok())
-            .unwrap_or(0);
+        let offset = cursor.and_then(|c| c.parse::<usize>().ok()).unwrap_or(0);
 
         // Filter and collect into a vec for pagination
         let filtered: Vec<_> = resources
@@ -249,10 +247,12 @@ impl ResourceForwarder {
             .take(DEFAULT_PAGE_SIZE)
             .map(|r| {
                 let namespaced_name = format!("{}:{}", r.service_name.as_str(), r.name);
-                let description = r.description.clone().unwrap_or_else(|| {
-                    format!("Resource from {}", r.service_name.as_str())
-                });
-                let description_with_provenance = format!("{} [from {}]", description, r.service_name.as_str());
+                let description = r
+                    .description
+                    .clone()
+                    .unwrap_or_else(|| format!("Resource from {}", r.service_name.as_str()));
+                let description_with_provenance =
+                    format!("{} [from {}]", description, r.service_name.as_str());
 
                 RawResource {
                     uri: r.uri.to_string(),
@@ -263,7 +263,8 @@ impl ResourceForwarder {
                     size: r.size,
                     icons: r.icons,
                     meta: None,
-                }.optional_annotate(r.annotations)
+                }
+                .optional_annotate(r.annotations)
             })
             .collect();
 
@@ -304,9 +305,13 @@ impl ResourceForwarder {
             let resource_name = parts[1].to_lowercase();
 
             let registry = self.registry.lock().await;
-            let found = registry.list_resources()
+            let found = registry
+                .list_resources()
                 .into_iter()
-                .find(|r| r.service_name.as_str().to_lowercase() == service_name && r.name.to_lowercase() == resource_name)
+                .find(|r| {
+                    r.service_name.as_str().to_lowercase() == service_name
+                        && r.name.to_lowercase() == resource_name
+                })
                 .map(|r| r.uri.to_string());
             drop(registry);
 
@@ -327,7 +332,8 @@ impl ResourceForwarder {
         let registry = self.registry.lock().await;
 
         // Resolve the URI to service_id
-        let (service_id, _) = registry.resolve(&uri)
+        let (service_id, _) = registry
+            .resolve(&uri)
             .ok_or_else(|| ResourceError::NotFound(uri.clone()))?;
 
         // Drop the registry lock before making the async call
@@ -335,7 +341,8 @@ impl ResourceForwarder {
 
         // Forward the request to the appropriate service
         let services = self.running_services.lock().await;
-        let service = services.get(service_id.as_str())
+        let service = services
+            .get(service_id.as_str())
             .ok_or_else(|| ResourceError::Internal(format!("Service not found: {}", service_id)))?;
 
         // Read the actual resource contents
@@ -368,9 +375,7 @@ impl ResourceForwarder {
         let filter_lower = service_filter.map(|s| s.to_lowercase());
 
         // Parse cursor to get offset
-        let offset = cursor
-            .and_then(|c| c.parse::<usize>().ok())
-            .unwrap_or(0);
+        let offset = cursor.and_then(|c| c.parse::<usize>().ok()).unwrap_or(0);
 
         // Filter and collect into a vec for pagination
         let filtered: Vec<_> = templates
@@ -394,7 +399,8 @@ impl ResourceForwarder {
                 let description = t.description.clone().unwrap_or_else(|| {
                     format!("Resource template from {}", t.service_name.as_str())
                 });
-                let description_with_provenance = format!("{} [from {}]", description, t.service_name.as_str());
+                let description_with_provenance =
+                    format!("{} [from {}]", description, t.service_name.as_str());
 
                 RawResourceTemplate {
                     uri_template: t.uri_template,
@@ -403,7 +409,8 @@ impl ResourceForwarder {
                     description: Some(description_with_provenance),
                     mime_type: t.mime_type,
                     icons: None,
-                }.optional_annotate(t.annotations)
+                }
+                .optional_annotate(t.annotations)
             })
             .collect();
 
@@ -437,7 +444,11 @@ impl ResourceForwarder {
             match self.discover_service_resources(service_id, service).await {
                 Ok(n) => count += n,
                 Err(e) => {
-                    tracing::warn!("Failed to discover resources from service {}: {}", service_id, e);
+                    tracing::warn!(
+                        "Failed to discover resources from service {}: {}",
+                        service_id,
+                        e
+                    );
                 }
             }
         }
@@ -459,7 +470,8 @@ impl ResourceForwarder {
 
         // Get service name from the database
         let service_name = self.get_service_name(service_id).await.unwrap_or_else(|| {
-            service_id.split(':')
+            service_id
+                .split(':')
                 .next()
                 .unwrap_or(service_id)
                 .to_string()
@@ -677,11 +689,7 @@ mod tests {
 
         let registry = Arc::new(Mutex::new(ResourceRegistry::new()));
         let running_services = Arc::new(Mutex::new(HashMap::new()));
-        let forwarder = ResourceForwarder::new(
-            registry.clone(),
-            running_services.clone(),
-            db,
-        );
+        let forwarder = ResourceForwarder::new(registry.clone(), running_services.clone(), db);
 
         // Manually add a resource to test clearing
         {
@@ -712,11 +720,7 @@ mod tests {
 
         let registry = Arc::new(Mutex::new(ResourceRegistry::new()));
         let running_services = Arc::new(Mutex::new(HashMap::new()));
-        let forwarder = ResourceForwarder::new(
-            registry.clone(),
-            running_services.clone(),
-            db,
-        );
+        let forwarder = ResourceForwarder::new(registry.clone(), running_services.clone(), db);
 
         // Invalid URI with path traversal
         let result = forwarder.read_resource("file:///../../../etc/passwd").await;
@@ -742,11 +746,7 @@ mod tests {
 
         let registry = Arc::new(Mutex::new(ResourceRegistry::new()));
         let running_services = Arc::new(Mutex::new(HashMap::new()));
-        let forwarder = ResourceForwarder::new(
-            registry.clone(),
-            running_services.clone(),
-            db,
-        );
+        let forwarder = ResourceForwarder::new(registry.clone(), running_services.clone(), db);
 
         // Add some resources to the registry
         {
@@ -759,17 +759,35 @@ mod tests {
         assert_eq!(result.resources.len(), 2);
 
         // Check namespacing
-        let filesystem_resource = result.resources.iter()
+        let filesystem_resource = result
+            .resources
+            .iter()
             .find(|r| r.name.to_string().contains("filesystem"))
             .unwrap();
         assert_eq!(filesystem_resource.name.to_string(), "filesystem:config");
-        assert!(filesystem_resource.description.as_ref().map(|d| d.as_str()).unwrap_or("").contains("[from filesystem]"));
+        assert!(
+            filesystem_resource
+                .description
+                .as_ref()
+                .map(|d| d.as_str())
+                .unwrap_or("")
+                .contains("[from filesystem]")
+        );
 
-        let github_resource = result.resources.iter()
+        let github_resource = result
+            .resources
+            .iter()
             .find(|r| r.name.to_string().contains("github"))
             .unwrap();
         assert_eq!(github_resource.name.to_string(), "github:readme");
-        assert!(github_resource.description.as_ref().map(|d| d.as_str()).unwrap_or("").contains("[from github]"));
+        assert!(
+            github_resource
+                .description
+                .as_ref()
+                .map(|d| d.as_str())
+                .unwrap_or("")
+                .contains("[from github]")
+        );
     }
 
     #[tokio::test]
@@ -783,11 +801,7 @@ mod tests {
 
         let registry = Arc::new(Mutex::new(ResourceRegistry::new()));
         let running_services = Arc::new(Mutex::new(HashMap::new()));
-        let forwarder = ResourceForwarder::new(
-            registry.clone(),
-            running_services.clone(),
-            db,
-        );
+        let forwarder = ResourceForwarder::new(registry.clone(), running_services.clone(), db);
 
         // Add resources from multiple services
         {
@@ -798,19 +812,28 @@ mod tests {
         }
 
         // Filter by filesystem service
-        let result = forwarder.list_resources(Some("filesystem"), None).await.unwrap();
+        let result = forwarder
+            .list_resources(Some("filesystem"), None)
+            .await
+            .unwrap();
         assert_eq!(result.resources.len(), 2);
         for resource in &result.resources {
             assert!(resource.name.to_string().starts_with("filesystem:"));
         }
 
         // Filter by github service
-        let result = forwarder.list_resources(Some("github"), None).await.unwrap();
+        let result = forwarder
+            .list_resources(Some("github"), None)
+            .await
+            .unwrap();
         assert_eq!(result.resources.len(), 1);
         assert_eq!(result.resources[0].name.to_string(), "github:readme");
 
         // Filter by non-existent service
-        let result = forwarder.list_resources(Some("nonexistent"), None).await.unwrap();
+        let result = forwarder
+            .list_resources(Some("nonexistent"), None)
+            .await
+            .unwrap();
         assert_eq!(result.resources.len(), 0);
     }
 
@@ -825,11 +848,7 @@ mod tests {
 
         let registry = Arc::new(Mutex::new(ResourceRegistry::new()));
         let running_services = Arc::new(Mutex::new(HashMap::new()));
-        let forwarder = ResourceForwarder::new(
-            registry.clone(),
-            running_services.clone(),
-            db,
-        );
+        let forwarder = ResourceForwarder::new(registry.clone(), running_services.clone(), db);
 
         // Add some templates to the registry
         {
@@ -860,17 +879,38 @@ mod tests {
         assert_eq!(result.resource_templates.len(), 2);
 
         // Check namespacing
-        let filesystem_template = result.resource_templates.iter()
+        let filesystem_template = result
+            .resource_templates
+            .iter()
             .find(|t| t.name.to_string().contains("filesystem"))
             .unwrap();
-        assert_eq!(filesystem_template.name.to_string(), "filesystem:file-template");
-        assert!(filesystem_template.description.as_ref().map(|d| d.as_str()).unwrap_or("").contains("[from filesystem]"));
+        assert_eq!(
+            filesystem_template.name.to_string(),
+            "filesystem:file-template"
+        );
+        assert!(
+            filesystem_template
+                .description
+                .as_ref()
+                .map(|d| d.as_str())
+                .unwrap_or("")
+                .contains("[from filesystem]")
+        );
 
-        let github_template = result.resource_templates.iter()
+        let github_template = result
+            .resource_templates
+            .iter()
             .find(|t| t.name.to_string().contains("github"))
             .unwrap();
         assert_eq!(github_template.name.to_string(), "github:git-file");
-        assert!(github_template.description.as_ref().map(|d| d.as_str()).unwrap_or("").contains("[from github]"));
+        assert!(
+            github_template
+                .description
+                .as_ref()
+                .map(|d| d.as_str())
+                .unwrap_or("")
+                .contains("[from github]")
+        );
     }
 
     #[tokio::test]
@@ -884,11 +924,7 @@ mod tests {
 
         let registry = Arc::new(Mutex::new(ResourceRegistry::new()));
         let running_services = Arc::new(Mutex::new(HashMap::new()));
-        let forwarder = ResourceForwarder::new(
-            registry.clone(),
-            running_services.clone(),
-            db,
-        );
+        let forwarder = ResourceForwarder::new(registry.clone(), running_services.clone(), db);
 
         // Add a resource to the registry
         {
@@ -913,11 +949,7 @@ mod tests {
 
         let registry = Arc::new(Mutex::new(ResourceRegistry::new()));
         let running_services = Arc::new(Mutex::new(HashMap::new()));
-        let forwarder = ResourceForwarder::new(
-            registry.clone(),
-            running_services.clone(),
-            db,
-        );
+        let forwarder = ResourceForwarder::new(registry.clone(), running_services.clone(), db);
 
         // Add a resource to the registry
         {
@@ -944,11 +976,7 @@ mod tests {
 
         let registry = Arc::new(Mutex::new(ResourceRegistry::new()));
         let running_services = Arc::new(Mutex::new(HashMap::new()));
-        let forwarder = ResourceForwarder::new(
-            registry.clone(),
-            running_services.clone(),
-            db,
-        );
+        let forwarder = ResourceForwarder::new(registry.clone(), running_services.clone(), db);
 
         // Add resources from services with different casing
         {
@@ -959,13 +987,22 @@ mod tests {
         }
 
         // Case-insensitive filter should match regardless of case
-        let result = forwarder.list_resources(Some("filesystem"), None).await.unwrap();
+        let result = forwarder
+            .list_resources(Some("filesystem"), None)
+            .await
+            .unwrap();
         assert_eq!(result.resources.len(), 2);
 
-        let result = forwarder.list_resources(Some("FILESYSTEM"), None).await.unwrap();
+        let result = forwarder
+            .list_resources(Some("FILESYSTEM"), None)
+            .await
+            .unwrap();
         assert_eq!(result.resources.len(), 2);
 
-        let result = forwarder.list_resources(Some("github"), None).await.unwrap();
+        let result = forwarder
+            .list_resources(Some("github"), None)
+            .await
+            .unwrap();
         assert_eq!(result.resources.len(), 1);
     }
 }

@@ -2,7 +2,7 @@ use crate::db::schema::*;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet, VecDeque};
-use surrealdb::{engine::any::Any, RecordId, Surreal};
+use surrealdb::{RecordId, Surreal, engine::any::Any};
 
 #[derive(Debug, Clone)]
 pub struct KnowledgeGraph {
@@ -103,6 +103,12 @@ pub struct CompatibilityRule {
     pub description: String,
 }
 
+impl Default for KnowledgeGraph {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl KnowledgeGraph {
     pub fn new() -> Self {
         Self {
@@ -127,7 +133,11 @@ impl KnowledgeGraph {
         self.nodes.get(id)
     }
 
-    pub fn get_neighbors(&self, node_id: &RecordId, edge_type: Option<EdgeType>) -> Vec<&GraphEdge> {
+    pub fn get_neighbors(
+        &self,
+        node_id: &RecordId,
+        edge_type: Option<EdgeType>,
+    ) -> Vec<&GraphEdge> {
         self.edges
             .iter()
             .filter(|edge| {
@@ -152,8 +162,7 @@ impl KnowledgeGraph {
         self.edges
             .iter()
             .filter(|edge| {
-                (edge.from == *node_id || edge.to == *node_id)
-                    && types.contains(&edge.edge_type)
+                (edge.from == *node_id || edge.to == *node_id) && types.contains(&edge.edge_type)
             })
             .map(|edge| {
                 let other = if edge.from == *node_id {
@@ -166,6 +175,7 @@ impl KnowledgeGraph {
             .collect()
     }
 
+    #[allow(clippy::mutable_key_type)]
     pub fn find_path(
         &self,
         from: &RecordId,
@@ -202,10 +212,10 @@ impl KnowledgeGraph {
 
             for edge in self.get_neighbors(&current, None) {
                 // Respect allowed_edges if provided
-                if let Some(ref allowed) = allowed_edges {
-                    if !allowed.iter().any(|et| edge.edge_type == *et) {
-                        continue;
-                    }
+                if let Some(ref allowed) = allowed_edges
+                    && !allowed.contains(&edge.edge_type)
+                {
+                    continue;
                 }
 
                 let next = if edge.from == current {
@@ -233,17 +243,18 @@ impl KnowledgeGraph {
 
         // Path-based similarity (shorter path = more similar).
         // Distance is number of edges, which is path length - 1.
-        if let Some(path) = self.find_path(node1, node2, 5, None) {
-            if path.len() > 1 {
-                let distance = (path.len() - 1) as f32;
-                // Add 1.0 in the denominator to keep the score in (0, 1].
-                return Some(1.0 / (1.0 + distance));
-            }
+        if let Some(path) = self.find_path(node1, node2, 5, None)
+            && path.len() > 1
+        {
+            let distance = (path.len() - 1) as f32;
+            // Add 1.0 in the denominator to keep the score in (0, 1].
+            return Some(1.0 / (1.0 + distance));
         }
 
         None
     }
 
+    #[allow(clippy::mutable_key_type)]
     pub fn get_subgraph(&self, node_ids: &[RecordId]) -> KnowledgeGraph {
         let node_set: HashSet<&RecordId> = node_ids.iter().collect();
         let mut subgraph = KnowledgeGraph::new();
@@ -270,10 +281,7 @@ impl KnowledgeGraph {
         let mut graph = Self::new();
 
         // Load all services first so BelongsTo edges can be added safely.
-        let services: Vec<ServiceRecord> = db
-            .query("SELECT * FROM service")
-            .await?
-            .take(0)?;
+        let services: Vec<ServiceRecord> = db.query("SELECT * FROM service").await?.take(0)?;
 
         for service in &services {
             let node = GraphNode {
@@ -287,10 +295,7 @@ impl KnowledgeGraph {
         }
 
         // Load all tools and connect them to their services.
-        let tools: Vec<ToolRecord> = db
-            .query("SELECT * FROM tool")
-            .await?
-            .take(0)?;
+        let tools: Vec<ToolRecord> = db.query("SELECT * FROM tool").await?.take(0)?;
 
         for tool in tools {
             let node = GraphNode {
@@ -349,6 +354,12 @@ impl KnowledgeGraph {
     }
 }
 
+impl Default for TypeSystem {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TypeSystem {
     pub fn new() -> Self {
         Self {
@@ -375,13 +386,11 @@ impl TypeSystem {
         }
 
         // Check inheritance (if from_type inherits from to_type)
-        if let Some(from_type) = self.types.get(from) {
-            if let Some(base_type) = &from_type.base_type {
-                if base_type == to {
-                    return Some(0.8);
-                }
-                return self.is_compatible(base_type, to).map(|c| c * 0.8);
+        if let Some(base_type) = self.types.get(from).and_then(|ft| ft.base_type.as_ref()) {
+            if base_type == to {
+                return Some(0.8);
             }
+            return self.is_compatible(base_type, to).map(|c| c * 0.8);
         }
 
         None
@@ -512,7 +521,11 @@ mod tests {
         let node3_id = RecordId::from(("tool", "tool3"));
 
         // Add nodes
-        for (id, name) in [(node1_id.clone(), "tool1"), (node2_id.clone(), "tool2"), (node3_id.clone(), "tool3")] {
+        for (id, name) in [
+            (node1_id.clone(), "tool1"),
+            (node2_id.clone(), "tool2"),
+            (node3_id.clone(), "tool3"),
+        ] {
             graph.add_node(GraphNode {
                 id,
                 node_type: NodeType::Tool,
@@ -559,7 +572,11 @@ mod tests {
         let node3_id = RecordId::from(("tool", "tool3"));
 
         // Add nodes
-        for (id, name) in [(node1_id.clone(), "tool1"), (node2_id.clone(), "tool2"), (node3_id.clone(), "tool3")] {
+        for (id, name) in [
+            (node1_id.clone(), "tool1"),
+            (node2_id.clone(), "tool2"),
+            (node3_id.clone(), "tool3"),
+        ] {
             graph.add_node(GraphNode {
                 id,
                 node_type: NodeType::Tool,
@@ -593,7 +610,8 @@ mod tests {
         assert_eq!(dataflow_neighbors.len(), 1);
         assert_eq!(*dataflow_neighbors[0].0, node2_id);
 
-        let multiple_types = graph.neighbors_of(&node1_id, &[EdgeType::DataFlow, EdgeType::Sequential]);
+        let multiple_types =
+            graph.neighbors_of(&node1_id, &[EdgeType::DataFlow, EdgeType::Sequential]);
         assert_eq!(multiple_types.len(), 2);
 
         let no_match = graph.neighbors_of(&node1_id, &[EdgeType::Parallel]);
@@ -640,7 +658,11 @@ mod tests {
         let node3_id = RecordId::from(("tool", "tool3"));
 
         // Add nodes
-        for (id, name) in [(node1_id.clone(), "tool1"), (node2_id.clone(), "tool2"), (node3_id.clone(), "tool3")] {
+        for (id, name) in [
+            (node1_id.clone(), "tool1"),
+            (node2_id.clone(), "tool2"),
+            (node3_id.clone(), "tool3"),
+        ] {
             graph.add_node(GraphNode {
                 id,
                 node_type: NodeType::Tool,
@@ -707,7 +729,11 @@ mod tests {
         let node3_id = RecordId::from(("tool", "tool3"));
 
         // Add nodes
-        for (id, name) in [(node1_id.clone(), "tool1"), (node2_id.clone(), "tool2"), (node3_id.clone(), "tool3")] {
+        for (id, name) in [
+            (node1_id.clone(), "tool1"),
+            (node2_id.clone(), "tool2"),
+            (node3_id.clone(), "tool3"),
+        ] {
             graph.add_node(GraphNode {
                 id,
                 node_type: NodeType::Tool,
@@ -789,7 +815,11 @@ mod tests {
         let node3_id = RecordId::from(("tool", "tool3"));
 
         // Add nodes
-        for (id, name) in [(node1_id.clone(), "tool1"), (node2_id.clone(), "tool2"), (node3_id.clone(), "tool3")] {
+        for (id, name) in [
+            (node1_id.clone(), "tool1"),
+            (node2_id.clone(), "tool2"),
+            (node3_id.clone(), "tool3"),
+        ] {
             graph.add_node(GraphNode {
                 id,
                 node_type: NodeType::Tool,
@@ -827,7 +857,11 @@ mod tests {
         let node3_id = RecordId::from(("tool", "tool3"));
 
         // Add nodes
-        for (id, name) in [(node1_id.clone(), "tool1"), (node2_id.clone(), "tool2"), (node3_id.clone(), "tool3")] {
+        for (id, name) in [
+            (node1_id.clone(), "tool1"),
+            (node2_id.clone(), "tool2"),
+            (node3_id.clone(), "tool3"),
+        ] {
             graph.add_node(GraphNode {
                 id,
                 node_type: NodeType::Tool,
@@ -1077,11 +1111,14 @@ mod tests {
     #[test]
     fn test_type_info_serialization() {
         let mut properties = HashMap::new();
-        properties.insert("length".to_string(), TypeProperty {
-            property_type: "number".to_string(),
-            required: true,
-            description: Some("Length of the string".to_string()),
-        });
+        properties.insert(
+            "length".to_string(),
+            TypeProperty {
+                property_type: "number".to_string(),
+                required: true,
+                description: Some("Length of the string".to_string()),
+            },
+        );
 
         let type_info = TypeInfo {
             name: "string".to_string(),
@@ -1142,7 +1179,11 @@ mod tests {
         let node3_id = RecordId::from(("tool", "tool3"));
 
         // Add nodes
-        for (id, name) in [(node1_id.clone(), "tool1"), (node2_id.clone(), "tool2"), (node3_id.clone(), "tool3")] {
+        for (id, name) in [
+            (node1_id.clone(), "tool1"),
+            (node2_id.clone(), "tool2"),
+            (node3_id.clone(), "tool3"),
+        ] {
             graph.add_node(GraphNode {
                 id,
                 node_type: NodeType::Tool,

@@ -4,16 +4,15 @@
 //! When multiple services define prompts with the same name, the orchestrator creates
 //! namespaced aliases to avoid conflicts (e.g., `github-commit`, `gitlab-commit`).
 
+use crate::types::{PromptName, ServiceId, ServiceName};
+use anyhow::Result;
+use rmcp::model::{
+    GetPromptRequestParams, GetPromptResult, Icon, JsonObject, ListPromptsResult,
+    Prompt as McpPrompt, PromptArgument as McpPromptArgument,
+};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use rmcp::model::{
-    Prompt as McpPrompt, PromptArgument as McpPromptArgument,
-    GetPromptResult, GetPromptRequestParams, ListPromptsResult, JsonObject,
-    Icon,
-};
-use anyhow::Result;
-use crate::types::{PromptName, ServiceId, ServiceName};
 
 /// Error types for prompt operations.
 #[derive(Debug, Clone)]
@@ -65,7 +64,8 @@ fn is_valid_arguments(arguments: &Option<JsonObject>) -> bool {
             args.keys().all(|key| {
                 !key.is_empty()
                     && key.len() <= 128
-                    && key.chars()
+                    && key
+                        .chars()
                         .all(|c| c.is_alphanumeric() || c == '-' || c == '_')
             })
         }
@@ -79,10 +79,8 @@ fn sanitize_name(name: &str) -> String {
         .map(|c| {
             if c.is_alphanumeric() || c == '-' || c == '_' {
                 c
-            } else if c.is_whitespace() {
-                '-'
             } else {
-                '-' // Replace other special chars with hyphens
+                '-' // Replace whitespace and other special chars with hyphens
             }
         })
         .collect::<String>()
@@ -109,16 +107,16 @@ pub struct DiscoveredPrompt {
 #[derive(Clone, Debug)]
 struct PromptEntry {
     prompt: DiscoveredPrompt,
-    is_conflict: bool,          // Whether this prompt name has conflicts
-    namespaced_name: String,    // e.g., "github-commit"
+    is_conflict: bool,       // Whether this prompt name has conflicts
+    namespaced_name: String, // e.g., "github-commit"
 }
 
 /// Registry for managing discovered prompts from MCP services.
 #[derive(Clone)]
 pub struct PromptRegistry {
-    prompts: HashMap<String, PromptEntry>,  // Key: namespaced_name or prompt_name
-    prompt_to_services: HashMap<String, Vec<String>>,  // prompt_name -> [service_ids]
-    aliases: HashMap<String, String>,  // alias -> namespaced_name
+    prompts: HashMap<String, PromptEntry>, // Key: namespaced_name or prompt_name
+    prompt_to_services: HashMap<String, Vec<String>>, // prompt_name -> [service_ids]
+    aliases: HashMap<String, String>,      // alias -> namespaced_name
 }
 
 impl PromptRegistry {
@@ -139,7 +137,7 @@ impl PromptRegistry {
         // Track which services have this prompt
         self.prompt_to_services
             .entry(prompt_name.clone())
-            .or_insert_with(Vec::new)
+            .or_default()
             .push(service_id);
 
         // Create namespaced name with sanitized service and prompt names
@@ -148,11 +146,14 @@ impl PromptRegistry {
         let namespaced_name = format!("{}-{}", sanitized_service, sanitized_prompt);
 
         // Register the namespaced variant
-        self.prompts.insert(namespaced_name.clone(), PromptEntry {
-            prompt: prompt.clone(),
-            is_conflict: false,
-            namespaced_name: namespaced_name.clone(),
-        });
+        self.prompts.insert(
+            namespaced_name.clone(),
+            PromptEntry {
+                prompt: prompt.clone(),
+                is_conflict: false,
+                namespaced_name: namespaced_name.clone(),
+            },
+        );
 
         // Create alias from prompt_name to namespaced_name
         // This will be resolved during lookup
@@ -169,18 +170,19 @@ impl PromptRegistry {
             let lower_name = prompt_name.to_lowercase();
             case_insensitive_counts
                 .entry(lower_name)
-                .or_insert_with(Vec::new)
+                .or_default()
                 .extend(services.iter().cloned());
         }
 
         // Mark as conflicting if the case-insensitive name has multiple services
         let mut conflicting: HashSet<String> = HashSet::new();
-        for (prompt_name, _) in &self.prompt_to_services {
+        for prompt_name in self.prompt_to_services.keys() {
             let lower_name = prompt_name.to_lowercase();
-            if let Some(services) = case_insensitive_counts.get(&lower_name) {
-                if services.len() > 1 {
-                    conflicting.insert(prompt_name.clone());
-                }
+            if case_insensitive_counts
+                .get(&lower_name)
+                .is_some_and(|services| services.len() > 1)
+            {
+                conflicting.insert(prompt_name.clone());
             }
         }
 
@@ -194,40 +196,53 @@ impl PromptRegistry {
 
     /// List all registered prompts as MCP Prompt objects.
     pub fn list_prompts(&self) -> Vec<DiscoveredPrompt> {
-        self.prompts.values().map(|entry| {
-            let mut p = entry.prompt.clone();
+        self.prompts
+            .values()
+            .map(|entry| {
+                let mut p = entry.prompt.clone();
 
-            // For conflicts, update description to note the conflict
-            if entry.is_conflict {
-                let desc = p.description.as_deref()
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or("Prompt");
+                // For conflicts, update description to note the conflict
+                if entry.is_conflict {
+                    let desc = p
+                        .description
+                        .as_deref()
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or("Prompt");
 
-                // Count arguments for additional info
-                let arg_count = p.arguments.as_ref()
-                    .map(|args| args.len())
-                    .unwrap_or(0);
-                let arg_info = if arg_count > 0 {
-                    format!(" ({} argument{})", arg_count, if arg_count == 1 { "" } else { "s" })
-                } else {
-                    String::new()
-                };
+                    // Count arguments for additional info
+                    let arg_count = p.arguments.as_ref().map(|args| args.len()).unwrap_or(0);
+                    let arg_info = if arg_count > 0 {
+                        format!(
+                            " ({} argument{})",
+                            arg_count,
+                            if arg_count == 1 { "" } else { "s" }
+                        )
+                    } else {
+                        String::new()
+                    };
 
-                p.description = Some(format!(
-                    "{} (from {}){}\n\nNote: This prompt name is used by multiple services. \
+                    p.description = Some(format!(
+                        "{} (from {}){}\n\nNote: This prompt name is used by multiple services. \
                      Use the namespaced variant (e.g. {}-{}) to be specific.",
-                    desc, entry.prompt.service_name.as_str(), arg_info,
-                    sanitize_name(entry.prompt.service_name.as_str()), sanitize_name(entry.prompt.name.as_str())
-                ));
-            } else if p.description.as_ref().map(|s| s.is_empty()).unwrap_or(true) {
-                // Provide a sensible default for empty or missing descriptions
-                p.description = Some(format!("Prompt from {}", entry.prompt.service_name.as_str()));
-            }
+                        desc,
+                        entry.prompt.service_name.as_str(),
+                        arg_info,
+                        sanitize_name(entry.prompt.service_name.as_str()),
+                        sanitize_name(entry.prompt.name.as_str())
+                    ));
+                } else if p.description.as_ref().map(|s| s.is_empty()).unwrap_or(true) {
+                    // Provide a sensible default for empty or missing descriptions
+                    p.description = Some(format!(
+                        "Prompt from {}",
+                        entry.prompt.service_name.as_str()
+                    ));
+                }
 
-            // Use namespaced name for display
-            p.name = PromptName::new(entry.namespaced_name.clone());
-            p
-        }).collect()
+                // Use namespaced name for display
+                p.name = PromptName::new(entry.namespaced_name.clone());
+                p
+            })
+            .collect()
     }
 
     /// Resolve a prompt name to its entry.
@@ -241,14 +256,18 @@ impl PromptRegistry {
     pub fn resolve(&self, name: &str) -> Option<(String, String)> {
         // First, check if it's a direct match (namespaced name)
         if let Some(entry) = self.prompts.get(name) {
-            return Some((entry.prompt.service_id.to_string(), entry.prompt.name.to_string()));
+            return Some((
+                entry.prompt.service_id.to_string(),
+                entry.prompt.name.to_string(),
+            ));
         }
 
         // Check if it's an alias (original prompt name)
-        if let Some(namespaced) = self.aliases.get(name) {
-            if let Some(entry) = self.prompts.get(namespaced) {
-                return Some((entry.prompt.service_id.to_string(), entry.prompt.name.to_string()));
-            }
+        if let Some(entry) = self.aliases.get(name).and_then(|ns| self.prompts.get(ns)) {
+            return Some((
+                entry.prompt.service_id.to_string(),
+                entry.prompt.name.to_string(),
+            ));
         }
 
         // Check if it's a service-prompt pattern (for direct addressing)
@@ -260,8 +279,12 @@ impl PromptRegistry {
             // Try exact match first (with sanitized names)
             for entry in self.prompts.values() {
                 if sanitize_name(entry.prompt.service_name.as_str()) == sanitized_service
-                    && sanitize_name(entry.prompt.name.as_str()) == sanitized_prompt {
-                    return Some((entry.prompt.service_id.to_string(), entry.prompt.name.to_string()));
+                    && sanitize_name(entry.prompt.name.as_str()) == sanitized_prompt
+                {
+                    return Some((
+                        entry.prompt.service_id.to_string(),
+                        entry.prompt.name.to_string(),
+                    ));
                 }
             }
 
@@ -270,8 +293,12 @@ impl PromptRegistry {
             let prompt_lower = sanitized_prompt.to_lowercase();
             for entry in self.prompts.values() {
                 if sanitize_name(entry.prompt.service_name.as_str()).to_lowercase() == service_lower
-                    && sanitize_name(entry.prompt.name.as_str()).to_lowercase() == prompt_lower {
-                    return Some((entry.prompt.service_id.to_string(), entry.prompt.name.to_string()));
+                    && sanitize_name(entry.prompt.name.as_str()).to_lowercase() == prompt_lower
+                {
+                    return Some((
+                        entry.prompt.service_id.to_string(),
+                        entry.prompt.name.to_string(),
+                    ));
                 }
             }
         }
@@ -282,16 +309,22 @@ impl PromptRegistry {
         // Try case-insensitive namespaced match
         for (key, entry) in &self.prompts {
             if key.to_lowercase() == name_lower {
-                return Some((entry.prompt.service_id.to_string(), entry.prompt.name.to_string()));
+                return Some((
+                    entry.prompt.service_id.to_string(),
+                    entry.prompt.name.to_string(),
+                ));
             }
         }
 
         // Try case-insensitive alias match
         for (alias, namespaced) in &self.aliases {
-            if alias.to_lowercase() == name_lower {
-                if let Some(entry) = self.prompts.get(namespaced) {
-                    return Some((entry.prompt.service_id.to_string(), entry.prompt.name.to_string()));
-                }
+            if alias.to_lowercase() == name_lower
+                && let Some(entry) = self.prompts.get(namespaced)
+            {
+                return Some((
+                    entry.prompt.service_id.to_string(),
+                    entry.prompt.name.to_string(),
+                ));
             }
         }
 
@@ -329,7 +362,8 @@ const DEFAULT_PAGE_SIZE: usize = 100;
 /// Handles prompt forwarding to discovered MCP services.
 pub struct PromptForwarder {
     pub(crate) registry: Arc<Mutex<PromptRegistry>>,
-    pub(crate) running_services: Arc<Mutex<HashMap<String, Arc<crate::mcp_client::RunningService>>>>,
+    pub(crate) running_services:
+        Arc<Mutex<HashMap<String, Arc<crate::mcp_client::RunningService>>>>,
     /// Database reference for querying service metadata.
     db: surrealdb::Surreal<surrealdb::engine::any::Any>,
 }
@@ -361,9 +395,7 @@ impl PromptForwarder {
         let prompts = registry.list_prompts();
 
         // Parse cursor to get offset
-        let offset = cursor
-            .and_then(|c| c.parse::<usize>().ok())
-            .unwrap_or(0);
+        let offset = cursor.and_then(|c| c.parse::<usize>().ok()).unwrap_or(0);
 
         let total = prompts.len();
         let next_offset = offset + DEFAULT_PAGE_SIZE;
@@ -382,9 +414,9 @@ impl PromptForwarder {
                 let title = p.title.unwrap_or_else(|| p.name.to_string());
 
                 McpPrompt {
-                    name: p.name.to_string().into(),
-                    title: Some(title.into()),
-                    description: p.description.map(Into::into),
+                    name: p.name.to_string(),
+                    title: Some(title),
+                    description: p.description,
                     arguments: p.arguments,
                     icons: p.icons,
                     meta: None,
@@ -393,7 +425,7 @@ impl PromptForwarder {
             .collect();
 
         let next_cursor = if next_offset < total {
-            Some(next_offset.to_string().into())
+            Some(next_offset.to_string())
         } else {
             None
         };
@@ -418,13 +450,16 @@ impl PromptForwarder {
 
         // Validate arguments for security
         if !is_valid_arguments(&arguments) {
-            return Err(PromptError::InvalidArguments("Arguments validation failed".to_string()));
+            return Err(PromptError::InvalidArguments(
+                "Arguments validation failed".to_string(),
+            ));
         }
 
         let registry = self.registry.lock().await;
 
         // Resolve the prompt name to service_id and original prompt name
-        let (service_id, prompt_name) = registry.resolve(name)
+        let (service_id, prompt_name) = registry
+            .resolve(name)
             .ok_or_else(|| PromptError::NotFound(name.to_string()))?;
 
         // Drop the registry lock before making the async call
@@ -432,7 +467,8 @@ impl PromptForwarder {
 
         // Forward the request to the appropriate service
         let services = self.running_services.lock().await;
-        let service = services.get(&service_id)
+        let service = services
+            .get(&service_id)
             .ok_or_else(|| PromptError::Internal(format!("Service not found: {}", service_id)))?;
 
         // Call the service's prompts/get method via rmcp
@@ -440,9 +476,7 @@ impl PromptForwarder {
             .client
             .get_prompt(GetPromptRequestParams {
                 name: prompt_name,
-                arguments: arguments.map(|a| {
-                    a.into_iter().map(|(k, v)| (k.into(), v)).collect()
-                }),
+                arguments: arguments.map(|a| a.into_iter().collect()),
                 meta: None,
             })
             .await
@@ -466,7 +500,11 @@ impl PromptForwarder {
             match self.discover_service_prompts(service_id, service).await {
                 Ok(n) => count += n,
                 Err(e) => {
-                    tracing::warn!("Failed to discover prompts from service {}: {}", service_id, e);
+                    tracing::warn!(
+                        "Failed to discover prompts from service {}: {}",
+                        service_id,
+                        e
+                    );
                 }
             }
         }
@@ -625,7 +663,13 @@ mod tests {
         assert_eq!(prompts.len(), 1);
         assert_eq!(prompts[0].name.as_str(), "github-commit");
         // No conflict note in description
-        assert!(!prompts[0].description.as_ref().unwrap().contains("Note: This prompt name is used by multiple services"));
+        assert!(
+            !prompts[0]
+                .description
+                .as_ref()
+                .unwrap()
+                .contains("Note: This prompt name is used by multiple services")
+        );
     }
 
     #[test]
@@ -640,7 +684,13 @@ mod tests {
 
         // Both should have conflict notes
         for prompt in &prompts {
-            assert!(prompt.description.as_ref().unwrap().contains("Note: This prompt name is used by multiple services"));
+            assert!(
+                prompt
+                    .description
+                    .as_ref()
+                    .unwrap()
+                    .contains("Note: This prompt name is used by multiple services")
+            );
         }
     }
 
@@ -656,7 +706,13 @@ mod tests {
 
         // Both should be marked as conflicting despite case difference
         for prompt in &prompts {
-            assert!(prompt.description.as_ref().unwrap().contains("Note: This prompt name is used by multiple services"));
+            assert!(
+                prompt
+                    .description
+                    .as_ref()
+                    .unwrap()
+                    .contains("Note: This prompt name is used by multiple services")
+            );
         }
     }
 
@@ -754,7 +810,11 @@ mod tests {
     fn test_prompt_registry_resolve_service_prompt_with_spaces() {
         let mut registry = PromptRegistry::new();
         // Service with spaces in the name
-        registry.register(mock_prompt("My Service", "commit msg", Some("Create a commit")));
+        registry.register(mock_prompt(
+            "My Service",
+            "commit msg",
+            Some("Create a commit"),
+        ));
         registry.mark_conflicts();
 
         // All of these should resolve to the same prompt
@@ -773,21 +833,25 @@ mod tests {
         let prompts = registry.list_prompts();
         assert_eq!(prompts.len(), 1);
         // Should have default description
-        assert!(prompts[0].description.as_ref().unwrap().contains("Prompt from github"));
+        assert!(
+            prompts[0]
+                .description
+                .as_ref()
+                .unwrap()
+                .contains("Prompt from github")
+        );
     }
 
     #[test]
     fn test_prompt_registry_conflict_with_arguments() {
         let mut registry = PromptRegistry::new();
         let mut p1 = mock_prompt("github", "commit", Some("Create a commit"));
-        p1.arguments = Some(vec![
-            McpPromptArgument {
-                name: "message".to_string(),
-                title: None,
-                description: Some("Commit message".to_string()),
-                required: Some(true),
-            },
-        ]);
+        p1.arguments = Some(vec![McpPromptArgument {
+            name: "message".to_string(),
+            title: None,
+            description: Some("Commit message".to_string()),
+            required: Some(true),
+        }]);
 
         let mut p2 = mock_prompt("gitlab", "commit", Some("Create a commit"));
         p2.arguments = Some(vec![
@@ -812,12 +876,30 @@ mod tests {
         let prompts = registry.list_prompts();
 
         // Find the one with 2 arguments (gitlab)
-        let gitlab_prompt = prompts.iter().find(|p| p.name.as_str() == "gitlab-commit").unwrap();
-        assert!(gitlab_prompt.description.as_ref().unwrap().contains("(2 arguments)"));
+        let gitlab_prompt = prompts
+            .iter()
+            .find(|p| p.name.as_str() == "gitlab-commit")
+            .unwrap();
+        assert!(
+            gitlab_prompt
+                .description
+                .as_ref()
+                .unwrap()
+                .contains("(2 arguments)")
+        );
 
         // Find the one with 1 argument (github)
-        let github_prompt = prompts.iter().find(|p| p.name.as_str() == "github-commit").unwrap();
-        assert!(github_prompt.description.as_ref().unwrap().contains("(1 argument)"));
+        let github_prompt = prompts
+            .iter()
+            .find(|p| p.name.as_str() == "github-commit")
+            .unwrap();
+        assert!(
+            github_prompt
+                .description
+                .as_ref()
+                .unwrap()
+                .contains("(1 argument)")
+        );
     }
 
     #[tokio::test]
@@ -832,11 +914,7 @@ mod tests {
 
         let registry = Arc::new(Mutex::new(PromptRegistry::new()));
         let running_services = Arc::new(Mutex::new(HashMap::new()));
-        let forwarder = PromptForwarder::new(
-            registry.clone(),
-            running_services.clone(),
-            db,
-        );
+        let forwarder = PromptForwarder::new(registry.clone(), running_services.clone(), db);
 
         // Since we don't have actual MCP services, we'll test the clear() directly
         // by manually adding prompts to the registry
@@ -941,11 +1019,7 @@ mod tests {
 
         let registry = Arc::new(Mutex::new(PromptRegistry::new()));
         let running_services = Arc::new(Mutex::new(HashMap::new()));
-        let forwarder = PromptForwarder::new(
-            registry.clone(),
-            running_services.clone(),
-            db,
-        );
+        let forwarder = PromptForwarder::new(registry.clone(), running_services.clone(), db);
 
         // Invalid prompt name with injection attempt
         let result = forwarder.get_prompt("commit; drop table", None).await;
@@ -967,11 +1041,7 @@ mod tests {
 
         let registry = Arc::new(Mutex::new(PromptRegistry::new()));
         let running_services = Arc::new(Mutex::new(HashMap::new()));
-        let forwarder = PromptForwarder::new(
-            registry.clone(),
-            running_services.clone(),
-            db,
-        );
+        let forwarder = PromptForwarder::new(registry.clone(), running_services.clone(), db);
 
         // Too many arguments
         let mut args = JsonObject::new();
@@ -999,11 +1069,7 @@ mod tests {
 
         let registry = Arc::new(Mutex::new(PromptRegistry::new()));
         let running_services = Arc::new(Mutex::new(HashMap::new()));
-        let forwarder = PromptForwarder::new(
-            registry.clone(),
-            running_services.clone(),
-            db,
-        );
+        let forwarder = PromptForwarder::new(registry.clone(), running_services.clone(), db);
 
         // Valid name but doesn't exist
         let result = forwarder.get_prompt("nonexistent-prompt", None).await;

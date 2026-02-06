@@ -20,8 +20,8 @@
 //! (`URL_ELICITATION_REQUIRED_ERROR_CODE`) with the URL in the error data.
 //! See `ElicitationError::url_elicitation_required()` for a convenient builder.
 
+use crate::elicitation::store::{OAuthState, PermissionStore};
 use crate::elicitation::{ElicitationError, ElicitationResult, UrlElicitationRequest};
-use crate::elicitation::store::{PermissionStore, OAuthState};
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -61,12 +61,21 @@ impl UrlHandler {
 
         // Ensure HTTPS for production (allow HTTP for development)
         if !["http", "https"].contains(&parsed.scheme()) {
-            return Err(ElicitationError::InvalidSchema("URL must use HTTP or HTTPS".to_string()));
+            return Err(ElicitationError::InvalidSchema(
+                "URL must use HTTP or HTTPS".to_string(),
+            ));
         }
 
         // Warn about HTTP in production
-        if parsed.scheme() == "http" && !parsed.host_str().map_or(false, |h| h.starts_with("localhost") || h.starts_with("127.0.0.1")) {
-            tracing::warn!("URL mode elicitation using HTTP (non-localhost): {}", request.url);
+        if parsed.scheme() == "http"
+            && !parsed
+                .host_str()
+                .is_some_and(|h| h.starts_with("localhost") || h.starts_with("127.0.0.1"))
+        {
+            tracing::warn!(
+                "URL mode elicitation using HTTP (non-localhost): {}",
+                request.url
+            );
         }
 
         // Ensure elicitation_id is present
@@ -110,8 +119,13 @@ impl UrlHandler {
     }
 
     /// Validate and retrieve OAuth state.
-    pub async fn validate_oauth_state(&self, elicitation_id: &str) -> ElicitationResult<OAuthState> {
-        self.store.get_oauth_state(elicitation_id).await?
+    pub async fn validate_oauth_state(
+        &self,
+        elicitation_id: &str,
+    ) -> ElicitationResult<OAuthState> {
+        self.store
+            .get_oauth_state(elicitation_id)
+            .await?
             .ok_or_else(|| ElicitationError::NotFound(elicitation_id.to_string()))
     }
 
@@ -236,14 +250,15 @@ mod tests {
         let store = PermissionStore::new(db);
         let handler = UrlHandler::new(Arc::new(store)).unwrap();
 
-        let (request, id) = handler.create_oauth_elicitation(
-            "user123",
-            "github",
-            "Please authorize with GitHub"
-        ).unwrap();
+        let (request, id) = handler
+            .create_oauth_elicitation("user123", "github", "Please authorize with GitHub")
+            .unwrap();
 
         assert!(request.url.as_str().contains("/oauth/connect/github"));
-        assert_eq!(request.service_name.map(|s| s.to_string()), Some("github".to_string()));
+        assert_eq!(
+            request.service_name.map(|s| s.to_string()),
+            Some("github".to_string())
+        );
         assert!(id.starts_with("elicitation-"));
     }
 }

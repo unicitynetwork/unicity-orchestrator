@@ -65,7 +65,11 @@ impl UserContext {
     }
 
     /// Set client metadata for audit logging.
-    pub fn with_client_info(mut self, ip_address: Option<String>, user_agent: Option<String>) -> Self {
+    pub fn with_client_info(
+        mut self,
+        ip_address: Option<String>,
+        user_agent: Option<String>,
+    ) -> Self {
         self.ip_address = ip_address;
         self.user_agent = user_agent;
         self
@@ -167,11 +171,10 @@ mod tests {
 
     #[test]
     fn test_user_context_with_client_info() {
-        let ctx = UserContext::anonymous(test_user_id())
-            .with_client_info(
-                Some("192.168.1.1".to_string()),
-                Some("Mozilla/5.0".to_string()),
-            );
+        let ctx = UserContext::anonymous(test_user_id()).with_client_info(
+            Some("192.168.1.1".to_string()),
+            Some("Mozilla/5.0".to_string()),
+        );
 
         assert_eq!(ctx.ip_address(), Some("192.168.1.1"));
         assert_eq!(ctx.user_agent(), Some("Mozilla/5.0"));

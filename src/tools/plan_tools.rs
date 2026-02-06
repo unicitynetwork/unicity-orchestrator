@@ -3,12 +3,12 @@
 //! Given a higher-level goal, proposes a multi-step plan using underlying
 //! MCP tools, without executing them.
 
-use std::pin::Pin;
-use std::sync::Arc;
+use crate::orchestrator::Orchestrator;
+use crate::tools::{ToolContext, ToolHandler};
 use rmcp::model::{CallToolResult, Content, JsonObject};
 use serde_json::json;
-use crate::orchestrator::Orchestrator;
-use crate::tools::{ToolHandler, ToolContext};
+use std::pin::Pin;
+use std::sync::Arc;
 
 /// Handler for the `unicity.plan_tools` tool.
 pub struct PlanToolsHandler {
@@ -24,10 +24,7 @@ impl PlanToolsHandler {
     /// Build the input schema for this tool.
     fn input_schema(&self) -> JsonObject {
         let mut schema = JsonObject::new();
-        schema.insert(
-            "type".to_string(),
-            json!("object"),
-        );
+        schema.insert("type".to_string(), json!("object"));
 
         let mut properties = serde_json::Map::new();
         properties.insert(
@@ -54,10 +51,7 @@ impl PlanToolsHandler {
     /// Build the output schema for this tool.
     fn output_schema(&self) -> JsonObject {
         let mut schema = JsonObject::new();
-        schema.insert(
-            "type".to_string(),
-            json!("object"),
-        );
+        schema.insert("type".to_string(), json!("object"));
 
         let mut properties = serde_json::Map::new();
         properties.insert(

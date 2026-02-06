@@ -4,12 +4,12 @@
 //! appropriate tool from discovered MCP services using semantic search
 //! and symbolic reasoning.
 
-use std::pin::Pin;
-use std::sync::Arc;
+use crate::orchestrator::Orchestrator;
+use crate::tools::{ToolContext, ToolHandler};
 use rmcp::model::{CallToolResult, Content, JsonObject};
 use serde_json::json;
-use crate::orchestrator::Orchestrator;
-use crate::tools::{ToolHandler, ToolContext};
+use std::pin::Pin;
+use std::sync::Arc;
 
 /// Handler for the `unicity.select_tool` tool.
 pub struct SelectToolHandler {
@@ -25,10 +25,7 @@ impl SelectToolHandler {
     /// Build the input schema for this tool.
     fn input_schema(&self) -> JsonObject {
         let mut schema = JsonObject::new();
-        schema.insert(
-            "type".to_string(),
-            json!("object"),
-        );
+        schema.insert("type".to_string(), json!("object"));
 
         let mut properties = serde_json::Map::new();
         properties.insert(
@@ -55,10 +52,7 @@ impl SelectToolHandler {
     /// Build the output schema for this tool.
     fn output_schema(&self) -> JsonObject {
         let mut schema = JsonObject::new();
-        schema.insert(
-            "type".to_string(),
-            json!("object"),
-        );
+        schema.insert("type".to_string(), json!("object"));
         schema.insert(
             "description".to_string(),
             json!("Selection result describing which underlying MCP tool to use and why."),

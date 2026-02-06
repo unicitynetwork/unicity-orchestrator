@@ -2,18 +2,18 @@
 //!
 //! Execute a previously selected underlying MCP tool by toolId with the given arguments.
 
-use std::pin::Pin;
-use std::future::Future;
-use std::sync::Arc;
-use rmcp::model::{CallToolResult, Content, EnumSchema, JsonObject};
-use serde_json::json;
 use crate::auth::UserStore;
 use crate::db::ToolRecord;
 use crate::elicitation::ElicitationSchema;
 use crate::knowledge_graph::ToolSelection;
 use crate::orchestrator::Orchestrator;
 use crate::orchestrator::user_filter::UserToolFilter;
-use crate::tools::{ToolHandler, ToolContext};
+use crate::tools::{ToolContext, ToolHandler};
+use rmcp::model::{CallToolResult, Content, EnumSchema, JsonObject};
+use serde_json::json;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
 
 /// Handler for the `unicity.execute_tool` tool.
 pub struct ExecuteToolHandler {
@@ -29,10 +29,7 @@ impl ExecuteToolHandler {
     /// Build the input schema for this tool.
     fn input_schema(&self) -> JsonObject {
         let mut schema = JsonObject::new();
-        schema.insert(
-            "type".to_string(),
-            json!("object"),
-        );
+        schema.insert("type".to_string(), json!("object"));
 
         let mut properties = serde_json::Map::new();
         properties.insert(
@@ -57,7 +54,10 @@ impl ExecuteToolHandler {
     }
 
     /// Look up a tool by its ID string.
-    async fn lookup_tool(orchestrator: &Orchestrator, tool_id_str: String) -> Result<Option<ToolRecord>, String> {
+    async fn lookup_tool(
+        orchestrator: &Orchestrator,
+        tool_id_str: String,
+    ) -> Result<Option<ToolRecord>, String> {
         let db_res = orchestrator
             .db()
             .query("SELECT * FROM type::thing($id)")
@@ -65,12 +65,10 @@ impl ExecuteToolHandler {
             .await;
 
         match db_res {
-            Ok(mut res) => {
-                match res.take(0) {
-                    Ok(tool) => Ok(tool),
-                    Err(e) => Err(format!("Failed to decode ToolRecord: {}", e)),
-                }
-            }
+            Ok(mut res) => match res.take(0) {
+                Ok(tool) => Ok(tool),
+                Err(e) => Err(format!("Failed to decode ToolRecord: {}", e)),
+            },
             Err(e) => Err(format!("Database error while loading tool: {}", e)),
         }
     }
@@ -178,8 +176,7 @@ impl ToolHandler for ExecuteToolHandler {
                          - allow_once: Execute this tool just this once\n\
                          - unblock_service: Remove the block and execute\n\
                          - keep_blocked: Don't execute, keep the service blocked",
-                        tool.name,
-                        service_id_str
+                        tool.name, service_id_str
                     );
 
                     let schema = ElicitationSchema::builder()
@@ -189,7 +186,8 @@ impl ToolHandler for ExecuteToolHandler {
                                 "allow_once".to_string(),
                                 "unblock_service".to_string(),
                                 "keep_blocked".to_string(),
-                            ]).build(),
+                            ])
+                            .build(),
                         )
                         .description("Blocked service action")
                         .build()
@@ -202,7 +200,8 @@ impl ToolHandler for ExecuteToolHandler {
 
                             match response.action {
                                 ElicitationAction::Accept => {
-                                    let action_str = response.content
+                                    let action_str = response
+                                        .content
                                         .as_ref()
                                         .and_then(|c| c.get("action"))
                                         .and_then(|v| v.as_str())
@@ -214,8 +213,12 @@ impl ToolHandler for ExecuteToolHandler {
                                         }
                                         "unblock_service" => {
                                             // Unblock the service and continue
-                                            let user_store = UserStore::new(orchestrator.db().clone());
-                                            if let Err(e) = user_store.unblock_service(ctx.user_id(), &service_id_str).await {
+                                            let user_store =
+                                                UserStore::new(orchestrator.db().clone());
+                                            if let Err(e) = user_store
+                                                .unblock_service(ctx.user_id(), &service_id_str)
+                                                .await
+                                            {
                                                 tracing::warn!("Failed to unblock service: {}", e);
                                             } else {
                                                 tracing::info!(
@@ -226,13 +229,15 @@ impl ToolHandler for ExecuteToolHandler {
                                             }
                                             // Continue with execution (fall through)
                                         }
-                                        "keep_blocked" | _ => {
+                                        _ => {
                                             let payload = json!({
                                                 "status": "blocked",
                                                 "reason": format!("Tool execution blocked: service '{}' is blocked", service_id_str),
                                             });
                                             let text = serde_json::to_string(&payload)
-                                                .unwrap_or_else(|_| "internal serialization error".to_string());
+                                                .unwrap_or_else(|_| {
+                                                    "internal serialization error".to_string()
+                                                });
                                             return Ok(CallToolResult {
                                                 content: vec![Content::text(text)],
                                                 structured_content: None,
@@ -247,8 +252,10 @@ impl ToolHandler for ExecuteToolHandler {
                                         "status": "blocked",
                                         "reason": format!("Tool execution blocked: service '{}' is blocked", service_id_str),
                                     });
-                                    let text = serde_json::to_string(&payload)
-                                        .unwrap_or_else(|_| "internal serialization error".to_string());
+                                    let text =
+                                        serde_json::to_string(&payload).unwrap_or_else(|_| {
+                                            "internal serialization error".to_string()
+                                        });
                                     return Ok(CallToolResult {
                                         content: vec![Content::text(text)],
                                         structured_content: None,

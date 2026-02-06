@@ -3,23 +3,25 @@
 
 pub mod user_filter;
 
+use anyhow::{Result, anyhow};
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use surrealdb::engine::any::Any;
 use surrealdb::{RecordId, Surreal};
-use anyhow::{anyhow, Result};
-use serde_json::Value;
+use tokio::sync::Mutex;
 
 use crate::auth::UserContext;
-use crate::db::{DatabaseConfig, create_connection, ensure_schema, ToolRecord, ServiceRecord};
-use crate::db::schema::{AuditAction, AuditLogCreate};
-use crate::knowledge_graph::{KnowledgeGraph, EmbeddingManager, SymbolicReasoner, ToolSelection};
 use crate::config::McpConfigs;
+use crate::db::schema::{AuditAction, AuditLogCreate};
+use crate::db::{DatabaseConfig, ServiceRecord, ToolRecord, create_connection, ensure_schema};
+use crate::elicitation::{
+    ApprovalRequest, ElicitationCoordinator, ElicitationFallbackPolicy, PermissionStatus,
+};
+use crate::knowledge_graph::{EmbeddingManager, KnowledgeGraph, SymbolicReasoner, ToolSelection};
 use crate::mcp_client::RunningService;
-use crate::prompts::{PromptRegistry, PromptForwarder};
-use crate::resources::{ResourceRegistry, ResourceForwarder};
-use crate::elicitation::{ElicitationCoordinator, ElicitationFallbackPolicy, ApprovalRequest, PermissionStatus};
+use crate::prompts::{PromptForwarder, PromptRegistry};
+use crate::resources::{ResourceForwarder, ResourceRegistry};
 use crate::types::{ExternalUserId, ServiceId, ServiceName, ToolId};
 use rmcp::model::JsonObject;
 use std::sync::Arc as StdArc;
@@ -48,6 +50,7 @@ pub struct Orchestrator {
     knowledge_graph: KnowledgeGraph,
     embedding_manager: Mutex<EmbeddingManager>,
     symbolic_reasoner: Mutex<SymbolicReasoner>,
+    #[allow(clippy::mutable_key_type)]
     running_services: HashMap<RecordId, Arc<RunningService>>,
     prompt_forwarder: StdArc<PromptForwarder>,
     resource_forwarder: StdArc<ResourceForwarder>,
@@ -64,7 +67,8 @@ impl Orchestrator {
         let embedding_manager_inner = EmbeddingManager::new(
             db.clone(),
             crate::knowledge_graph::embedding::EmbeddingConfig::default(),
-        ).await?;
+        )
+        .await?;
         let symbolic_reasoner_inner = SymbolicReasoner::new(db.clone());
 
         // Initialize prompt registry and forwarder
@@ -158,7 +162,8 @@ impl Orchestrator {
                                     origin: crate::db::schema::ServiceOrigin::StaticConfig,
                                     registry_id: None,
                                 },
-                            ).await?;
+                            )
+                            .await?;
 
                             let service_id = service.id.clone();
                             let rc = Arc::new(running_service);
@@ -167,30 +172,27 @@ impl Orchestrator {
 
                             // Also add to prompt_forwarder's running_services map
                             {
-                                let mut services_map = self.prompt_forwarder.running_services.lock().await;
+                                let mut services_map =
+                                    self.prompt_forwarder.running_services.lock().await;
                                 services_map.insert(service_id.to_string(), rc.clone());
                             }
 
                             // Also add to resource_forwarder's running_services map
                             {
-                                let mut services_map = self.resource_forwarder.running_services.lock().await;
+                                let mut services_map =
+                                    self.resource_forwarder.running_services.lock().await;
                                 services_map.insert(service_id.to_string(), rc.clone());
                             }
 
                             for tool in tools {
                                 let input_schema = (*tool.input_schema).clone();
-                                let output_schema = tool
-                                    .output_schema
-                                    .as_ref()
-                                    .map(|schema| (**schema).clone());
+                                let output_schema =
+                                    tool.output_schema.as_ref().map(|schema| (**schema).clone());
 
                                 let create_tool = crate::db::schema::CreateToolRecord {
                                     service_id: service.id.clone(),
                                     name: tool.name.to_string(),
-                                    description: tool
-                                        .description
-                                        .as_ref()
-                                        .map(|d| d.to_string()),
+                                    description: tool.description.as_ref().map(|d| d.to_string()),
                                     input_schema,
                                     output_schema,
                                     embedding_id: None,
@@ -198,8 +200,11 @@ impl Orchestrator {
                                     output_ty: None,
                                 };
 
-                                let _tool_record =
-                                    crate::db::queries::QueryBuilder::upsert_tool(&self.db, &create_tool).await?;
+                                let _tool_record = crate::db::queries::QueryBuilder::upsert_tool(
+                                    &self.db,
+                                    &create_tool,
+                                )
+                                .await?;
                                 discovered_tools += 1;
                             }
                         }
@@ -224,9 +229,7 @@ impl Orchestrator {
             let output_ty = tool
                 .output_schema
                 .as_ref()
-                .map(|schema| {
-                    crate::db::schema::TypedSchema::from_json_schema(schema)
-                });
+                .map(crate::db::schema::TypedSchema::from_json_schema);
 
             self.db
                 .query(
@@ -287,10 +290,7 @@ impl Orchestrator {
                 .await?
                 .take(0)?
         } else {
-            self.db
-                .query("SELECT * FROM tool")
-                .await?
-                .take(0)?
+            self.db.query("SELECT * FROM tool").await?.take(0)?
         };
 
         // Apply user filter to tools (removes blocked services)
@@ -402,10 +402,7 @@ impl Orchestrator {
                 .await?
                 .take(0)?
         } else {
-            self.db
-                .query("SELECT * FROM tool")
-                .await?
-                .take(0)?
+            self.db.query("SELECT * FROM tool").await?.take(0)?
         };
 
         // Apply user filter to tools (removes blocked services)
@@ -415,6 +412,7 @@ impl Orchestrator {
             return Ok(None);
         }
 
+        #[allow(clippy::mutable_key_type)]
         let mut tool_map: HashMap<RecordId, ToolRecord> = HashMap::new();
         for tool in &tools {
             tool_map.insert(tool.id.clone(), tool.clone());
@@ -441,7 +439,8 @@ impl Orchestrator {
             if let Some(tool) = tool_map.get(&step.tool_id) {
                 let mut inputs: Vec<String> = step.inputs.keys().cloned().collect();
 
-                if let Some(props) = tool.input_schema
+                if let Some(props) = tool
+                    .input_schema
                     .get("properties")
                     .and_then(|v| v.as_object())
                 {
@@ -451,9 +450,7 @@ impl Orchestrator {
                 let description = tool
                     .description
                     .clone()
-                    .unwrap_or_else(|| {
-                        format!("Step {}: call {}", step.step_number, tool.name)
-                    });
+                    .unwrap_or_else(|| format!("Step {}: call {}", step.step_number, tool.name));
 
                 steps.push(PlanStep {
                     description,
@@ -487,12 +484,7 @@ impl Orchestrator {
         selection: &ToolSelection,
         args: JsonObject,
     ) -> Result<Vec<rmcp::model::Content>> {
-        crate::executor::execute_selection(
-            &self.db,
-            &self.running_services,
-            selection,
-            args,
-        ).await
+        crate::executor::execute_selection(&self.db, &self.running_services, selection, args).await
     }
 
     /// Execute a selected tool with approval checks.
@@ -519,14 +511,14 @@ impl Orchestrator {
         let user_id = ExternalUserId::new(
             user_context
                 .map(|ctx| ctx.user_id_string())
-                .unwrap_or_else(|| "anonymous".to_string())
+                .unwrap_or_else(|| "anonymous".to_string()),
         );
 
         // Look up the service to get its name for the approval message
         let service_name = ServiceName::new(
             self.get_service_name(&selection.service_id)
                 .await
-                .unwrap_or_else(|| selection.service_id.to_string())
+                .unwrap_or_else(|| selection.service_id.to_string()),
         );
 
         let tool_id = ToolId::new(selection.tool_id.to_string());
@@ -561,9 +553,12 @@ impl Orchestrator {
                         "success": result.is_ok(),
                         "permission_type": "existing",
                     })),
-                    ip_address: user_context.and_then(|ctx| ctx.ip_address().map(|s| s.to_string())),
-                    user_agent: user_context.and_then(|ctx| ctx.user_agent().map(|s| s.to_string())),
-                }).await;
+                    ip_address: user_context
+                        .and_then(|ctx| ctx.ip_address().map(|s| s.to_string())),
+                    user_agent: user_context
+                        .and_then(|ctx| ctx.user_agent().map(|s| s.to_string())),
+                })
+                .await;
 
                 result
             }
@@ -578,9 +573,12 @@ impl Orchestrator {
                         "service_id": service_id.to_string(),
                         "reason": "previously_denied",
                     })),
-                    ip_address: user_context.and_then(|ctx| ctx.ip_address().map(|s| s.to_string())),
-                    user_agent: user_context.and_then(|ctx| ctx.user_agent().map(|s| s.to_string())),
-                }).await;
+                    ip_address: user_context
+                        .and_then(|ctx| ctx.ip_address().map(|s| s.to_string())),
+                    user_agent: user_context
+                        .and_then(|ctx| ctx.user_agent().map(|s| s.to_string())),
+                })
+                .await;
 
                 Err(anyhow!("Tool execution denied by user"))
             }
@@ -593,7 +591,8 @@ impl Orchestrator {
                     &service_id,
                     &service_name,
                     &user_id,
-                ).await
+                )
+                .await
             }
             PermissionStatus::Required => {
                 // No permission yet - need to request approval
@@ -604,7 +603,8 @@ impl Orchestrator {
                     &service_id,
                     &service_name,
                     &user_id,
-                ).await
+                )
+                .await
             }
         }
     }
@@ -620,7 +620,11 @@ impl Orchestrator {
         user_id: &ExternalUserId,
     ) -> Result<Vec<rmcp::model::Content>> {
         // Check if client supports elicitation
-        if !self.elicitation_coordinator.client_supports_elicitation().await {
+        if !self
+            .elicitation_coordinator
+            .client_supports_elicitation()
+            .await
+        {
             // Client doesn't support elicitation - check fallback policy
             let policy = self.elicitation_coordinator.fallback_policy().await;
             match policy {
@@ -665,7 +669,8 @@ impl Orchestrator {
         );
 
         // Send the elicitation request
-        let result = self.elicitation_coordinator
+        let result = self
+            .elicitation_coordinator
             .create_elicitation(&message, schema)
             .await
             .map_err(|e| anyhow!("Failed to send elicitation request: {:?}", e))?;
@@ -685,7 +690,9 @@ impl Orchestrator {
                 );
 
                 // Determine permission type from response
-                let permission_type = result.content.as_ref()
+                let permission_type = result
+                    .content
+                    .as_ref()
                     .and_then(|c| c.get("action"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown");
@@ -709,7 +716,8 @@ impl Orchestrator {
                     })),
                     ip_address: None,
                     user_agent: None,
-                }).await;
+                })
+                .await;
 
                 self.audit_log(AuditLogCreate {
                     user_id: Some(user_id.to_string()),
@@ -724,7 +732,8 @@ impl Orchestrator {
                     })),
                     ip_address: None,
                     user_agent: None,
-                }).await;
+                })
+                .await;
 
                 // Consume one-time permission after execution
                 if is_one_time {
@@ -755,7 +764,8 @@ impl Orchestrator {
                     })),
                     ip_address: None,
                     user_agent: None,
-                }).await;
+                })
+                .await;
 
                 Err(anyhow!("Tool execution denied by user"))
             }
@@ -769,7 +779,8 @@ impl Orchestrator {
     /// Look up the service name by ID.
     async fn get_service_name(&self, service_id: &RecordId) -> Option<String> {
         let query = "SELECT * FROM service WHERE id = $id LIMIT 1";
-        let mut res = self.db
+        let mut res = self
+            .db
             .query(query)
             .bind(("id", service_id.clone()))
             .await
@@ -790,6 +801,7 @@ impl Orchestrator {
     }
 
     /// Get reference to running services map.
+    #[allow(clippy::mutable_key_type)]
     pub fn running_services(&self) -> &HashMap<RecordId, Arc<RunningService>> {
         &self.running_services
     }
@@ -815,9 +827,7 @@ impl Orchestrator {
     }
 
     /// Get running services as a String-keyed map for use by the prompt forwarder.
-    pub async fn running_services_as_string_map(
-        &self,
-    ) -> HashMap<String, StdArc<RunningService>> {
+    pub async fn running_services_as_string_map(&self) -> HashMap<String, StdArc<RunningService>> {
         let mut map = HashMap::new();
         for (id, service) in &self.running_services {
             map.insert(id.to_string(), service.clone());
@@ -832,7 +842,8 @@ impl Orchestrator {
 
     /// Write an audit log entry.
     pub async fn audit_log(&self, entry: AuditLogCreate) {
-        let result = self.db
+        let result = self
+            .db
             .query(
                 r#"
                 CREATE audit_log CONTENT {

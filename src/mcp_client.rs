@@ -1,16 +1,16 @@
 // MCP client implementation backed by rmcp
 
-use std::borrow::Cow;
 use crate::config::McpServiceConfig;
 use anyhow::Result;
-use rmcp::{
-    model::{Tool as McpTool, ServerInfo},
-    service::{RunningService as RmcpRunningService, RoleClient},
-    ServiceExt,
-    transport::{TokioChildProcess, ConfigureCommandExt},
-};
 use rmcp::model::{CallToolRequestParams, Content, JsonObject};
 use rmcp::transport::StreamableHttpClientTransport;
+use rmcp::{
+    ServiceExt,
+    model::{ServerInfo, Tool as McpTool},
+    service::{RoleClient, RunningService as RmcpRunningService},
+    transport::{ConfigureCommandExt, TokioChildProcess},
+};
+use std::borrow::Cow;
 use tokio::process::Command;
 use tracing::{info, warn};
 
@@ -44,7 +44,7 @@ pub async fn start_stdio_service(cfg: &McpServiceConfig) -> Result<Option<Runnin
             cmd.args(args.iter().cloned());
         }
         if !env.is_empty() {
-            cmd.envs(env.iter().map(|(k, v)| (k, v)));
+            cmd.envs(env.iter());
         }
 
         let child = TokioChildProcess::new(cmd.configure(|_cmd| {
@@ -95,24 +95,21 @@ pub async fn start_service(cfg: &McpServiceConfig) -> Result<Option<RunningServi
 }
 
 /// Fetch service info + tools and normalize them using rmcp.
-pub async fn inspect_service(
-    running: &RunningService,
-) -> Result<(ServerInfo, Vec<McpTool>)> {
+pub async fn inspect_service(running: &RunningService) -> Result<(ServerInfo, Vec<McpTool>)> {
     // Basic metadata about the server from the MCP `initialize` handshake.
     // `peer_info` returns an Option<&ServerInfo>, so fall back to a minimal
     // placeholder if for some reason it is not set.
-    let server_info = running
-        .client
-        .peer_info()
-        .cloned()
-        .unwrap_or_else(|| ServerInfo::default());
+    let server_info = running.client.peer_info().cloned().unwrap_or_default();
 
     // List tools via rmcp. The exact return type is `ListToolsResult`, which
     // contains a `tools: Vec<Tool>` field.
     let tools = running.client.list_tools(Default::default()).await?.tools;
 
     if tools.is_empty() {
-        warn!("Service `{}` reported no tools", server_info.server_info.name);
+        warn!(
+            "Service `{}` reported no tools",
+            server_info.server_info.name
+        );
     }
 
     Ok((server_info, tools))

@@ -5,14 +5,14 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::auth::context::UserContext;
-use crate::auth::jwks::{JwksCache, DEFAULT_CACHE_TTL_SECONDS};
+use crate::auth::jwks::{DEFAULT_CACHE_TTL_SECONDS, JwksCache};
 use crate::auth::user_store::UserStore;
 use crate::db::Db;
 use crate::types::{ApiKeyHash, ApiKeyPrefix, ExternalUserId, IdentityProvider};
-use jsonwebtoken::{decode, decode_header, Algorithm, Validation};
+use jsonwebtoken::{Algorithm, Validation, decode, decode_header};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use tracing::{debug, warn};
+use tracing::debug;
 
 /// Authentication configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -202,10 +202,10 @@ impl AuthExtractor {
         user_agent: Option<String>,
     ) -> Result<UserContext, AuthError> {
         // Try Bearer token first
-        if let Some(auth_header) = authorization {
-            if let Some(token) = auth_header.strip_prefix("Bearer ") {
-                return self.extract_from_jwt(token, ip_address, user_agent).await;
-            }
+        if let Some(auth_header) = authorization
+            && let Some(token) = auth_header.strip_prefix("Bearer ")
+        {
+            return self.extract_from_jwt(token, ip_address, user_agent).await;
         }
 
         // Try API key
@@ -262,8 +262,9 @@ impl AuthExtractor {
         }
 
         // Decode and validate the token
-        let token_data = decode::<JwtClaims>(token, &decoding_key, &validation)
-            .map_err(|e| AuthError::InvalidToken(format!("Signature verification failed: {}", e)))?;
+        let token_data = decode::<JwtClaims>(token, &decoding_key, &validation).map_err(|e| {
+            AuthError::InvalidToken(format!("Signature verification failed: {}", e))
+        })?;
 
         let claims = token_data.claims;
 
@@ -444,8 +445,7 @@ impl AuthExtractor {
             return Err(AuthError::UserDeactivated);
         }
 
-        let ctx =
-            UserContext::anonymous(user.id).with_client_info(ip_address, user_agent);
+        let ctx = UserContext::anonymous(user.id).with_client_info(ip_address, user_agent);
 
         Ok(ctx)
     }
@@ -488,7 +488,7 @@ pub fn generate_api_key() -> (String, ApiKeyPrefix, ApiKeyHash) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{create_connection, ensure_schema, DatabaseConfig};
+    use crate::db::{DatabaseConfig, create_connection, ensure_schema};
 
     async fn setup_test_db() -> crate::db::Db {
         let config = DatabaseConfig {
@@ -584,10 +584,7 @@ mod tests {
             "Authentication required"
         );
         assert_eq!(AuthError::InvalidApiKey.to_string(), "Invalid API key");
-        assert_eq!(
-            AuthError::ApiKeyExpired.to_string(),
-            "API key has expired"
-        );
+        assert_eq!(AuthError::ApiKeyExpired.to_string(), "API key has expired");
         assert_eq!(
             AuthError::ApiKeyRevoked.to_string(),
             "API key has been revoked"
@@ -626,7 +623,9 @@ mod tests {
         let config = AuthConfig::with_api_key("secret123".to_string());
         let extractor = AuthExtractor::new(config, db);
 
-        let result = extractor.extract_user(None, Some("secret123"), None, None).await;
+        let result = extractor
+            .extract_user(None, Some("secret123"), None, None)
+            .await;
 
         assert!(result.is_ok());
         let ctx = result.unwrap();
@@ -640,7 +639,9 @@ mod tests {
         let config = AuthConfig::with_api_key("secret123".to_string());
         let extractor = AuthExtractor::new(config, db);
 
-        let result = extractor.extract_user(None, Some("wrong_key"), None, None).await;
+        let result = extractor
+            .extract_user(None, Some("wrong_key"), None, None)
+            .await;
 
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), AuthError::InvalidApiKey));
@@ -664,7 +665,10 @@ mod tests {
         let config = AuthConfig::local();
         let extractor = AuthExtractor::new(config, db.clone());
 
-        let ctx = extractor.extract_user(None, None, None, None).await.unwrap();
+        let ctx = extractor
+            .extract_user(None, None, None, None)
+            .await
+            .unwrap();
 
         extractor
             .user_store()

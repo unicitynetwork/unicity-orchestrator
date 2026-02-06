@@ -9,8 +9,8 @@
 
 use crate::elicitation::store::PermissionStore;
 use crate::elicitation::{
-    CreateElicitationResult, ElicitationAction, ElicitationError,
-    ElicitationResult, ElicitationSchema,
+    CreateElicitationResult, ElicitationAction, ElicitationError, ElicitationResult,
+    ElicitationSchema,
 };
 use crate::types::{ExternalUserId, ServiceId, ServiceName, ToolId};
 use serde::{Deserialize, Serialize};
@@ -95,15 +95,18 @@ impl ApprovalManager {
         service_id: &ServiceId,
         user_id: &ExternalUserId,
     ) -> ElicitationResult<PermissionStatus> {
-        match self.store.get_permission(tool_id.as_str(), service_id.as_str(), user_id.as_str()).await? {
+        match self
+            .store
+            .get_permission(tool_id.as_str(), service_id.as_str(), user_id.as_str())
+            .await?
+        {
             Some(permission) => {
                 // Check expiration
-                if let Some(expires_at) = &permission.expires_at {
-                    if let Ok(expiry) = chrono::DateTime::parse_from_rfc3339(expires_at) {
-                        if expiry < chrono::Utc::now() {
-                            return Ok(PermissionStatus::Expired);
-                        }
-                    }
+                if let Some(expires_at) = &permission.expires_at
+                    && let Ok(expiry) = chrono::DateTime::parse_from_rfc3339(expires_at)
+                    && expiry < chrono::Utc::now()
+                {
+                    return Ok(PermissionStatus::Expired);
                 }
 
                 match permission.action {
@@ -146,7 +149,9 @@ impl ApprovalManager {
         user_id: &ExternalUserId,
     ) -> ElicitationResult<()> {
         // Remove the one-time permission
-        self.store.delete_permission(tool_id.as_str(), service_id.as_str(), user_id.as_str()).await
+        self.store
+            .delete_permission(tool_id.as_str(), service_id.as_str(), user_id.as_str())
+            .await
     }
 
     /// Revoke all permissions for a tool.
@@ -155,7 +160,9 @@ impl ApprovalManager {
         tool_id: &ToolId,
         user_id: &ExternalUserId,
     ) -> ElicitationResult<()> {
-        self.store.delete_tool_permissions(tool_id.as_str(), user_id.as_str()).await
+        self.store
+            .delete_tool_permissions(tool_id.as_str(), user_id.as_str())
+            .await
     }
 
     /// Revoke all permissions for a service.
@@ -164,7 +171,9 @@ impl ApprovalManager {
         service_id: &ServiceId,
         user_id: &ExternalUserId,
     ) -> ElicitationResult<()> {
-        self.store.delete_service_permissions(service_id.as_str(), user_id.as_str()).await
+        self.store
+            .delete_service_permissions(service_id.as_str(), user_id.as_str())
+            .await
     }
 
     /// List all permissions for a user.
@@ -201,7 +210,8 @@ impl ApprovalManager {
                     "allow_once".to_string(),
                     "always_allow".to_string(),
                     "deny".to_string(),
-                ]).build(),
+                ])
+                .build(),
             )
             .optional_bool("remember", false)
             .description("Tool execution approval")
@@ -222,18 +232,28 @@ impl ApprovalManager {
         match response.action {
             ElicitationAction::Accept => {
                 // Parse the approval action from the content
-                let content = response.content.as_ref()
-                    .ok_or_else(|| ElicitationError::InvalidSchema("Missing content".to_string()))?;
+                let content = response.content.as_ref().ok_or_else(|| {
+                    ElicitationError::InvalidSchema("Missing content".to_string())
+                })?;
 
-                let action_str = content.get("action")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| ElicitationError::InvalidSchema("Missing action field".to_string()))?;
+                let action_str =
+                    content
+                        .get("action")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| {
+                            ElicitationError::InvalidSchema("Missing action field".to_string())
+                        })?;
 
                 let action = match action_str {
                     "allow_once" => ApprovalAction::AllowOnce,
                     "always_allow" => ApprovalAction::AlwaysAllow,
                     "deny" => ApprovalAction::Deny,
-                    _ => return Err(ElicitationError::InvalidSchema(format!("Invalid action: {}", action_str))),
+                    _ => {
+                        return Err(ElicitationError::InvalidSchema(format!(
+                            "Invalid action: {}",
+                            action_str
+                        )));
+                    }
                 };
 
                 // Grant the permission
@@ -241,7 +261,9 @@ impl ApprovalManager {
 
                 // Return the appropriate status
                 match action {
-                    ApprovalAction::AllowOnce | ApprovalAction::AlwaysAllow => Ok(PermissionStatus::Granted),
+                    ApprovalAction::AllowOnce | ApprovalAction::AlwaysAllow => {
+                        Ok(PermissionStatus::Granted)
+                    }
                     ApprovalAction::Deny => Ok(PermissionStatus::Denied),
                 }
             }
@@ -267,19 +289,36 @@ mod tests {
         let db = create_connection(config).await.unwrap();
 
         // Create the permission table
-        db.query("DEFINE TABLE permission SCHEMAFULL").await.unwrap();
-        db.query("DEFINE FIELD tool_id ON permission TYPE string").await.unwrap();
-        db.query("DEFINE FIELD service_id ON permission TYPE string").await.unwrap();
-        db.query("DEFINE FIELD user_id ON permission TYPE string").await.unwrap();
-        db.query("DEFINE FIELD action ON permission TYPE string").await.unwrap();
-        db.query("DEFINE FIELD created_at ON permission TYPE string").await.unwrap();
-        db.query("DEFINE FIELD expires_at ON permission TYPE option<string>").await.unwrap();
+        db.query("DEFINE TABLE permission SCHEMAFULL")
+            .await
+            .unwrap();
+        db.query("DEFINE FIELD tool_id ON permission TYPE string")
+            .await
+            .unwrap();
+        db.query("DEFINE FIELD service_id ON permission TYPE string")
+            .await
+            .unwrap();
+        db.query("DEFINE FIELD user_id ON permission TYPE string")
+            .await
+            .unwrap();
+        db.query("DEFINE FIELD action ON permission TYPE string")
+            .await
+            .unwrap();
+        db.query("DEFINE FIELD created_at ON permission TYPE string")
+            .await
+            .unwrap();
+        db.query("DEFINE FIELD expires_at ON permission TYPE option<string>")
+            .await
+            .unwrap();
 
         db
     }
 
     /// Helper to create an ApprovalManager with test database.
-    async fn setup_approval_manager() -> (ApprovalManager, surrealdb::Surreal<surrealdb::engine::any::Any>) {
+    async fn setup_approval_manager() -> (
+        ApprovalManager,
+        surrealdb::Surreal<surrealdb::engine::any::Any>,
+    ) {
         let db = setup_test_db().await;
         let store = Arc::new(PermissionStore::new(db.clone()));
         let manager = ApprovalManager::new(store);
@@ -350,7 +389,10 @@ mod tests {
         let request = test_request();
 
         // Grant always-allow permission
-        manager.grant_permission(&request, ApprovalAction::AlwaysAllow).await.unwrap();
+        manager
+            .grant_permission(&request, ApprovalAction::AlwaysAllow)
+            .await
+            .unwrap();
 
         let status = manager
             .check_permission(&request.tool_id, &request.service_id, &request.user_id)
@@ -366,7 +408,10 @@ mod tests {
         let request = test_request();
 
         // Grant one-time permission
-        manager.grant_permission(&request, ApprovalAction::AllowOnce).await.unwrap();
+        manager
+            .grant_permission(&request, ApprovalAction::AllowOnce)
+            .await
+            .unwrap();
 
         let status = manager
             .check_permission(&request.tool_id, &request.service_id, &request.user_id)
@@ -382,7 +427,10 @@ mod tests {
         let request = test_request();
 
         // Grant deny permission
-        manager.grant_permission(&request, ApprovalAction::Deny).await.unwrap();
+        manager
+            .grant_permission(&request, ApprovalAction::Deny)
+            .await
+            .unwrap();
 
         let status = manager
             .check_permission(&request.tool_id, &request.service_id, &request.user_id)
@@ -398,7 +446,10 @@ mod tests {
         let request = test_request();
 
         // Grant permission for user A
-        manager.grant_permission(&request, ApprovalAction::AlwaysAllow).await.unwrap();
+        manager
+            .grant_permission(&request, ApprovalAction::AlwaysAllow)
+            .await
+            .unwrap();
 
         // User A should have permission
         let status_a = manager
@@ -425,7 +476,10 @@ mod tests {
         let request = test_request();
 
         // Grant permission for tool A
-        manager.grant_permission(&request, ApprovalAction::AlwaysAllow).await.unwrap();
+        manager
+            .grant_permission(&request, ApprovalAction::AlwaysAllow)
+            .await
+            .unwrap();
 
         // Tool A should have permission
         let status_a = manager
@@ -452,7 +506,10 @@ mod tests {
         let request = test_request();
 
         // Grant one-time permission
-        manager.grant_permission(&request, ApprovalAction::AllowOnce).await.unwrap();
+        manager
+            .grant_permission(&request, ApprovalAction::AllowOnce)
+            .await
+            .unwrap();
 
         // Should be granted initially
         let status = manager
@@ -481,7 +538,10 @@ mod tests {
         let request = test_request();
 
         // Grant always-allow permission
-        manager.grant_permission(&request, ApprovalAction::AlwaysAllow).await.unwrap();
+        manager
+            .grant_permission(&request, ApprovalAction::AlwaysAllow)
+            .await
+            .unwrap();
 
         // Consume (this will delete, but always_allow should be re-checkable if not deleted)
         // Actually, consume_permission deletes the permission regardless of type
@@ -505,7 +565,10 @@ mod tests {
         let request = test_request();
 
         // Grant permission
-        manager.grant_permission(&request, ApprovalAction::AlwaysAllow).await.unwrap();
+        manager
+            .grant_permission(&request, ApprovalAction::AlwaysAllow)
+            .await
+            .unwrap();
 
         // Verify granted
         let status = manager
@@ -535,8 +598,14 @@ mod tests {
 
         let (message, _schema) = manager.create_approval_elicitation(&request);
 
-        assert!(message.contains("GitHub"), "Message should include service name");
-        assert!(message.contains(request.tool_id.as_str()), "Message should include tool ID");
+        assert!(
+            message.contains("GitHub"),
+            "Message should include service name"
+        );
+        assert!(
+            message.contains(request.tool_id.as_str()),
+            "Message should include tool ID"
+        );
     }
 
     #[tokio::test]
@@ -550,11 +619,18 @@ mod tests {
         let schema_json = serde_json::to_value(&schema).unwrap();
 
         // Check that properties contains "action"
-        let properties = schema_json.get("properties").expect("Schema should have properties");
-        assert!(properties.get("action").is_some(), "Schema should have action property");
+        let properties = schema_json
+            .get("properties")
+            .expect("Schema should have properties");
+        assert!(
+            properties.get("action").is_some(),
+            "Schema should have action property"
+        );
 
         // Check that "action" is in required
-        let required = schema_json.get("required").expect("Schema should have required");
+        let required = schema_json
+            .get("required")
+            .expect("Schema should have required");
         let required_array = required.as_array().expect("Required should be array");
         assert!(
             required_array.iter().any(|v| v.as_str() == Some("action")),
@@ -572,7 +648,10 @@ mod tests {
             content: Some(serde_json::json!({"action": "allow_once"})),
         };
 
-        let status = manager.handle_approval_response(&request, &response).await.unwrap();
+        let status = manager
+            .handle_approval_response(&request, &response)
+            .await
+            .unwrap();
         assert_eq!(status, PermissionStatus::Granted);
 
         // Verify permission was stored
@@ -593,7 +672,10 @@ mod tests {
             content: Some(serde_json::json!({"action": "always_allow"})),
         };
 
-        let status = manager.handle_approval_response(&request, &response).await.unwrap();
+        let status = manager
+            .handle_approval_response(&request, &response)
+            .await
+            .unwrap();
         assert_eq!(status, PermissionStatus::Granted);
     }
 
@@ -607,7 +689,10 @@ mod tests {
             content: Some(serde_json::json!({"action": "deny"})),
         };
 
-        let status = manager.handle_approval_response(&request, &response).await.unwrap();
+        let status = manager
+            .handle_approval_response(&request, &response)
+            .await
+            .unwrap();
         assert_eq!(status, PermissionStatus::Denied);
 
         // Verify deny permission was stored
@@ -628,7 +713,10 @@ mod tests {
             content: None,
         };
 
-        let status = manager.handle_approval_response(&request, &response).await.unwrap();
+        let status = manager
+            .handle_approval_response(&request, &response)
+            .await
+            .unwrap();
         assert_eq!(status, PermissionStatus::Denied);
     }
 
@@ -689,7 +777,8 @@ mod tests {
 
         // Manually insert an expired permission
         // Note: action should be the variant name without extra quotes
-        db.query(r#"
+        db.query(
+            r#"
             CREATE permission CONTENT {
                 tool_id: $tool_id,
                 service_id: $service_id,
@@ -698,15 +787,16 @@ mod tests {
                 created_at: $created_at,
                 expires_at: $expires_at
             }
-        "#)
-            .bind(("tool_id", tool_id))
-            .bind(("service_id", service_id))
-            .bind(("user_id", user_id))
-            .bind(("action", "always_allow".to_string()))
-            .bind(("created_at", created_at))
-            .bind(("expires_at", past_time))
-            .await
-            .unwrap();
+        "#,
+        )
+        .bind(("tool_id", tool_id))
+        .bind(("service_id", service_id))
+        .bind(("user_id", user_id))
+        .bind(("action", "always_allow".to_string()))
+        .bind(("created_at", created_at))
+        .bind(("expires_at", past_time))
+        .await
+        .unwrap();
 
         let status = manager
             .check_permission(&request.tool_id, &request.service_id, &request.user_id)
@@ -730,7 +820,8 @@ mod tests {
 
         // Manually insert a permission with future expiry
         // Note: action should be the variant name without extra quotes
-        db.query(r#"
+        db.query(
+            r#"
             CREATE permission CONTENT {
                 tool_id: $tool_id,
                 service_id: $service_id,
@@ -739,15 +830,16 @@ mod tests {
                 created_at: $created_at,
                 expires_at: $expires_at
             }
-        "#)
-            .bind(("tool_id", tool_id))
-            .bind(("service_id", service_id))
-            .bind(("user_id", user_id))
-            .bind(("action", "always_allow".to_string()))
-            .bind(("created_at", created_at))
-            .bind(("expires_at", future_time))
-            .await
-            .unwrap();
+        "#,
+        )
+        .bind(("tool_id", tool_id))
+        .bind(("service_id", service_id))
+        .bind(("user_id", user_id))
+        .bind(("action", "always_allow".to_string()))
+        .bind(("created_at", created_at))
+        .bind(("expires_at", future_time))
+        .await
+        .unwrap();
 
         let status = manager
             .check_permission(&request.tool_id, &request.service_id, &request.user_id)

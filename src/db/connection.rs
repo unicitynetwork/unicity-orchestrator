@@ -1,9 +1,9 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::env;
+use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 use surrealdb::opt::auth::Root;
-use surrealdb::Surreal;
 
 pub type Db = Surreal<Any>;
 
@@ -28,10 +28,8 @@ impl Default for DatabaseConfig {
 
         Self {
             url,
-            namespace: env::var("SURREALDB_NAMESPACE")
-                .unwrap_or_else(|_| "unicity".to_string()),
-            database: env::var("SURREALDB_DATABASE")
-                .unwrap_or_else(|_| "orchestrator".to_string()),
+            namespace: env::var("SURREALDB_NAMESPACE").unwrap_or_else(|_| "unicity".to_string()),
+            database: env::var("SURREALDB_DATABASE").unwrap_or_else(|_| "orchestrator".to_string()),
             username,
             password,
         }
@@ -225,7 +223,10 @@ pub async fn ensure_schema(db: &Db) -> Result<()> {
 
     // Seed fallback symbolic rule if table is empty - only attempt on first run
     // Check if the specific rule already exists
-    let existing_rule = db.query("SELECT * FROM symbolic_rule WHERE name = 'Fallback tool selection' LIMIT 1").await?.take::<Option<serde_json::Value>>(0)?;
+    let existing_rule = db
+        .query("SELECT * FROM symbolic_rule WHERE name = 'Fallback tool selection' LIMIT 1")
+        .await?
+        .take::<Option<serde_json::Value>>(0)?;
     if existing_rule.is_none() {
         // Create a simpler seed rule to avoid serialization issues
         let seed_rule = r#"
@@ -372,7 +373,11 @@ mod tests {
         };
 
         let result = create_connection(config).await;
-        assert!(result.is_ok(), "Failed to create memory connection: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to create memory connection: {:?}",
+            result.err()
+        );
 
         let db = result.unwrap();
         // Test that we can execute a simple query
@@ -393,7 +398,11 @@ mod tests {
         };
 
         let result = create_connection(config).await;
-        assert!(result.is_ok(), "Failed to create memory connection: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to create memory connection: {:?}",
+            result.err()
+        );
 
         let db = result.unwrap();
         // Test that we can execute a simple query
@@ -409,7 +418,11 @@ mod tests {
 
         // Test that ensure_schema doesn't fail
         let result = ensure_schema(&db).await;
-        assert!(result.is_ok(), "Failed to ensure schema: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to ensure schema: {:?}",
+            result.err()
+        );
 
         // Test that tables were created by trying to query them
         // If tables don't exist, these queries would fail
@@ -434,10 +447,18 @@ mod tests {
         // Run ensure_schema twice - both should succeed
         // The test verifies that schema creation is idempotent (can be run multiple times)
         let result1 = ensure_schema(&db).await;
-        assert!(result1.is_ok(), "First ensure_schema failed: {:?}", result1.err());
+        assert!(
+            result1.is_ok(),
+            "First ensure_schema failed: {:?}",
+            result1.err()
+        );
 
         let result2 = ensure_schema(&db).await;
-        assert!(result2.is_ok(), "Second ensure_schema failed: {:?}", result2.err());
+        assert!(
+            result2.is_ok(),
+            "Second ensure_schema failed: {:?}",
+            result2.err()
+        );
 
         // The test passes if both calls succeed, indicating idempotency
         assert!(true, "Schema creation is idempotent");
@@ -540,4 +561,3 @@ mod tests {
         assert_eq!(config2.password, Some("p@ssw0rd!#$%".to_string()));
     }
 }
-

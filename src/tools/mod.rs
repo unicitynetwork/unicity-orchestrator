@@ -6,15 +6,15 @@
 
 mod registry;
 
-pub use registry::{ToolHandler, ToolRegistry, ToolContext};
+pub use registry::{ToolContext, ToolHandler, ToolRegistry};
 
 // Tool handler implementations
-mod select_tool;
-mod plan_tools;
 mod execute_tool;
 mod list_discovered_tools;
+mod plan_tools;
+mod select_tool;
 
-pub use select_tool::SelectToolHandler;
-pub use plan_tools::PlanToolsHandler;
 pub use execute_tool::ExecuteToolHandler;
 pub use list_discovered_tools::ListDiscoveredToolsHandler;
+pub use plan_tools::PlanToolsHandler;
+pub use select_tool::SelectToolHandler;

@@ -5,8 +5,8 @@ use surrealdb::RecordId;
 
 use crate::db::Db;
 use crate::db::schema::{
-    UserRecord, UserCreate, UserPreferencesRecord, UserPreferencesUpdate,
-    AuditLogCreate, AuditAction,
+    AuditAction, AuditLogCreate, UserCreate, UserPreferencesRecord, UserPreferencesUpdate,
+    UserRecord,
 };
 
 /// User store for database operations.
@@ -63,7 +63,8 @@ impl UserStore {
             })),
             ip_address: None,
             user_agent: None,
-        }).await?;
+        })
+        .await?;
 
         Ok(user)
     }
@@ -84,7 +85,8 @@ impl UserStore {
             LIMIT 1
         "#;
 
-        let mut res = self.db
+        let mut res = self
+            .db
             .query(query)
             .bind(("external_id", external_id))
             .bind(("provider", provider))
@@ -98,10 +100,7 @@ impl UserStore {
     pub async fn get_user_by_id(&self, user_id: &RecordId) -> Result<Option<UserRecord>> {
         let query = "SELECT * FROM user WHERE id = $id LIMIT 1";
 
-        let mut res = self.db
-            .query(query)
-            .bind(("id", user_id.clone()))
-            .await?;
+        let mut res = self.db.query(query).bind(("id", user_id.clone())).await?;
 
         let users: Vec<UserRecord> = res.take(0)?;
         Ok(users.into_iter().next())
@@ -125,7 +124,8 @@ impl UserStore {
             }
         "#;
 
-        let mut res = self.db
+        let mut res = self
+            .db
             .query(query)
             .bind(("external_id", external_id))
             .bind(("provider", provider))
@@ -134,7 +134,9 @@ impl UserStore {
             .await?;
 
         let users: Vec<UserRecord> = res.take(0)?;
-        users.into_iter().next()
+        users
+            .into_iter()
+            .next()
             .ok_or_else(|| anyhow::anyhow!("Failed to create user"))
     }
 
@@ -147,10 +149,7 @@ impl UserStore {
             WHERE id = $id
         "#;
 
-        self.db
-            .query(query)
-            .bind(("id", user_id.clone()))
-            .await?;
+        self.db.query(query).bind(("id", user_id.clone())).await?;
 
         Ok(())
     }
@@ -164,10 +163,7 @@ impl UserStore {
             WHERE id = $id
         "#;
 
-        self.db
-            .query(query)
-            .bind(("id", user_id.clone()))
-            .await?;
+        self.db.query(query).bind(("id", user_id.clone())).await?;
 
         Ok(())
     }
@@ -181,10 +177,7 @@ impl UserStore {
             WHERE id = $id
         "#;
 
-        self.db
-            .query(query)
-            .bind(("id", user_id.clone()))
-            .await?;
+        self.db.query(query).bind(("id", user_id.clone())).await?;
 
         Ok(())
     }
@@ -211,10 +204,14 @@ impl UserStore {
     }
 
     /// Get user preferences.
-    pub async fn get_preferences(&self, user_id: &RecordId) -> Result<Option<UserPreferencesRecord>> {
+    pub async fn get_preferences(
+        &self,
+        user_id: &RecordId,
+    ) -> Result<Option<UserPreferencesRecord>> {
         let query = "SELECT * FROM user_preferences WHERE user_id = $user_id LIMIT 1";
 
-        let mut res = self.db
+        let mut res = self
+            .db
             .query(query)
             .bind(("user_id", user_id.clone()))
             .await?;
@@ -293,20 +290,26 @@ impl UserStore {
 
     /// Check if a service is trusted by the user.
     pub async fn is_service_trusted(&self, user_id: &RecordId, service_id: &str) -> Result<bool> {
-        if let Some(prefs) = self.get_preferences(user_id).await? {
-            if let Some(trusted) = &prefs.trusted_services {
-                return Ok(trusted.contains(&service_id.to_string()));
-            }
+        if let Some(prefs) = self.get_preferences(user_id).await?
+            && prefs
+                .trusted_services
+                .as_ref()
+                .is_some_and(|trusted| trusted.contains(&service_id.to_string()))
+        {
+            return Ok(true);
         }
         Ok(false)
     }
 
     /// Check if a service is blocked by the user.
     pub async fn is_service_blocked(&self, user_id: &RecordId, service_id: &str) -> Result<bool> {
-        if let Some(prefs) = self.get_preferences(user_id).await? {
-            if let Some(blocked) = &prefs.blocked_services {
-                return Ok(blocked.contains(&service_id.to_string()));
-            }
+        if let Some(prefs) = self.get_preferences(user_id).await?
+            && prefs
+                .blocked_services
+                .as_ref()
+                .is_some_and(|blocked| blocked.contains(&service_id.to_string()))
+        {
+            return Ok(true);
         }
         Ok(false)
     }
@@ -315,27 +318,27 @@ impl UserStore {
     ///
     /// Removes the service from the user's blocked_services list.
     pub async fn unblock_service(&self, user_id: &RecordId, service_id: &str) -> Result<()> {
-        if let Some(prefs) = self.get_preferences(user_id).await? {
-            if let Some(blocked) = &prefs.blocked_services {
-                let new_blocked: Vec<String> = blocked
-                    .iter()
-                    .filter(|s| s.as_str() != service_id)
-                    .cloned()
-                    .collect();
+        if let Some(prefs) = self.get_preferences(user_id).await?
+            && let Some(blocked) = &prefs.blocked_services
+        {
+            let new_blocked: Vec<String> = blocked
+                .iter()
+                .filter(|s| s.as_str() != service_id)
+                .cloned()
+                .collect();
 
-                let query = r#"
-                    UPDATE user_preferences SET
-                        blocked_services = $blocked,
-                        updated_at = time::now()
-                    WHERE user_id = $user_id
-                "#;
+            let query = r#"
+                UPDATE user_preferences SET
+                    blocked_services = $blocked,
+                    updated_at = time::now()
+                WHERE user_id = $user_id
+            "#;
 
-                self.db
-                    .query(query)
-                    .bind(("user_id", user_id.clone()))
-                    .bind(("blocked", new_blocked))
-                    .await?;
-            }
+            self.db
+                .query(query)
+                .bind(("user_id", user_id.clone()))
+                .bind(("blocked", new_blocked))
+                .await?;
         }
         Ok(())
     }
@@ -412,7 +415,8 @@ impl UserStore {
             LIMIT $limit
         "#;
 
-        let mut res = self.db
+        let mut res = self
+            .db
             .query(query)
             .bind(("user_id", user_id))
             .bind(("limit", limit))
@@ -426,7 +430,7 @@ impl UserStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{create_connection, ensure_schema, DatabaseConfig};
+    use crate::db::{DatabaseConfig, create_connection, ensure_schema};
 
     async fn setup_test_db() -> Db {
         let config = DatabaseConfig {
@@ -443,12 +447,10 @@ mod tests {
         let db = setup_test_db().await;
         let store = UserStore::new(db);
 
-        let user = store.get_or_create_user(
-            "sub123",
-            "jwt",
-            Some("test@example.com"),
-            Some("Test User"),
-        ).await.unwrap();
+        let user = store
+            .get_or_create_user("sub123", "jwt", Some("test@example.com"), Some("Test User"))
+            .await
+            .unwrap();
 
         assert_eq!(user.external_id, "sub123");
         assert_eq!(user.provider, "jwt");
@@ -463,20 +465,16 @@ mod tests {
         let store = UserStore::new(db);
 
         // Create user
-        let user1 = store.get_or_create_user(
-            "sub123",
-            "jwt",
-            Some("test@example.com"),
-            Some("Test User"),
-        ).await.unwrap();
+        let user1 = store
+            .get_or_create_user("sub123", "jwt", Some("test@example.com"), Some("Test User"))
+            .await
+            .unwrap();
 
         // Get same user again
-        let user2 = store.get_or_create_user(
-            "sub123",
-            "jwt",
-            Some("test@example.com"),
-            Some("Test User"),
-        ).await.unwrap();
+        let user2 = store
+            .get_or_create_user("sub123", "jwt", Some("test@example.com"), Some("Test User"))
+            .await
+            .unwrap();
 
         assert_eq!(user1.id, user2.id);
     }
@@ -486,12 +484,10 @@ mod tests {
         let db = setup_test_db().await;
         let store = UserStore::new(db);
 
-        let user = store.get_or_create_user(
-            "sub123",
-            "jwt",
-            None,
-            None,
-        ).await.unwrap();
+        let user = store
+            .get_or_create_user("sub123", "jwt", None, None)
+            .await
+            .unwrap();
 
         assert!(user.is_active);
 
@@ -513,12 +509,10 @@ mod tests {
         let db = setup_test_db().await;
         let store = UserStore::new(db);
 
-        let user = store.get_or_create_user(
-            "sub123",
-            "jwt",
-            None,
-            None,
-        ).await.unwrap();
+        let user = store
+            .get_or_create_user("sub123", "jwt", None, None)
+            .await
+            .unwrap();
 
         let prefs = store.get_preferences(&user.id).await.unwrap();
         assert!(prefs.is_some());
@@ -534,15 +528,16 @@ mod tests {
         let db = setup_test_db().await;
         let store = UserStore::new(db);
 
-        let user = store.get_or_create_user(
-            "sub123",
-            "jwt",
-            None,
-            None,
-        ).await.unwrap();
+        let user = store
+            .get_or_create_user("sub123", "jwt", None, None)
+            .await
+            .unwrap();
 
         // The user creation should have logged an audit entry
-        let logs = store.get_user_audit_log(&user.id.to_string(), 10).await.unwrap();
+        let logs = store
+            .get_user_audit_log(&user.id.to_string(), 10)
+            .await
+            .unwrap();
 
         // Should have at least one log entry (the login/creation)
         assert!(!logs.is_empty());
@@ -555,19 +550,15 @@ mod tests {
         let store = UserStore::new(db);
 
         // Same external_id but different providers = different users
-        let user1 = store.get_or_create_user(
-            "user123",
-            "jwt",
-            None,
-            None,
-        ).await.unwrap();
+        let user1 = store
+            .get_or_create_user("user123", "jwt", None, None)
+            .await
+            .unwrap();
 
-        let user2 = store.get_or_create_user(
-            "user123",
-            "api_key",
-            None,
-            None,
-        ).await.unwrap();
+        let user2 = store
+            .get_or_create_user("user123", "api_key", None, None)
+            .await
+            .unwrap();
 
         assert_ne!(user1.id, user2.id);
     }
@@ -577,18 +568,19 @@ mod tests {
         let db = setup_test_db().await;
         let store = UserStore::new(db);
 
-        let user = store.get_or_create_user(
-            "trust_test_user",
-            "jwt",
-            None,
-            None,
-        ).await.unwrap();
+        let user = store
+            .get_or_create_user("trust_test_user", "jwt", None, None)
+            .await
+            .unwrap();
 
         // Initially no services are trusted
         let trusted = store.is_service_trusted(&user.id, "github").await.unwrap();
         assert!(!trusted);
 
-        let blocked = store.is_service_blocked(&user.id, "malicious").await.unwrap();
+        let blocked = store
+            .is_service_blocked(&user.id, "malicious")
+            .await
+            .unwrap();
         assert!(!blocked);
     }
 }

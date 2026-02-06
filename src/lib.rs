@@ -1,42 +1,41 @@
 // Core modules
-mod config;
-mod mcp_client;
-pub mod db;
-mod knowledge_graph;
 pub mod api;
+mod config;
+pub mod db;
 mod executor;
+mod knowledge_graph;
+mod mcp_client;
 
 // NewType wrappers for strong typing
 pub mod types;
 
 // New modular structure
+pub mod auth;
+mod elicitation;
 mod orchestrator;
-mod tools;
 mod prompts;
 mod resources;
-mod elicitation;
 pub mod server;
-pub mod auth;
+mod tools;
 
 // Re-export key types and functions
-pub use db::{DatabaseConfig, create_connection, ensure_schema, ToolRecord};
-pub use knowledge_graph::{KnowledgeGraph, EmbeddingManager};
+pub use auth::{AuthConfig, UserContext, generate_api_key, hash_api_key};
 pub use config::McpServiceConfig;
-pub use auth::{generate_api_key, hash_api_key, AuthConfig, UserContext};
+pub use db::{DatabaseConfig, ToolRecord, create_connection, ensure_schema};
+pub use knowledge_graph::{EmbeddingManager, KnowledgeGraph};
 pub use types::{
-    ToolId, ToolName, ServiceId, ExternalUserId, IdentityProvider,
-    ServiceConfigId, ResourceUri, PromptName, ServiceName, OAuthUrl, RedirectUri,
-    ApiKeyHash, ApiKeyPrefix,
+    ApiKeyHash, ApiKeyPrefix, ExternalUserId, IdentityProvider, OAuthUrl, PromptName, RedirectUri,
+    ResourceUri, ServiceConfigId, ServiceId, ServiceName, ToolId, ToolName,
 };
 
 // Re-export from new modular structure
-pub use orchestrator::{Orchestrator, PlanStep, PlanResult};
-pub use tools::{ToolHandler, ToolRegistry};
+pub use orchestrator::{Orchestrator, PlanResult, PlanStep};
 pub use server::McpServer;
+pub use tools::{ToolHandler, ToolRegistry};
 
-use std::sync::Arc;
 use anyhow::Result;
-use tools::{SelectToolHandler, PlanToolsHandler, ExecuteToolHandler, ListDiscoveredToolsHandler};
+use std::sync::Arc;
+use tools::{ExecuteToolHandler, ListDiscoveredToolsHandler, PlanToolsHandler, SelectToolHandler};
 
 /// Convenience function to create a fully configured MCP server.
 ///

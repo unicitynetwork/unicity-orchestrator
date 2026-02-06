@@ -7,9 +7,9 @@
 
 use crate::elicitation::{ElicitationError, ElicitationResult, ToolPermission};
 use crate::types::{ExternalUserId, IdentityProvider, RedirectUri};
+use std::sync::Arc;
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
-use std::sync::Arc;
 use tokio::sync::Mutex;
 
 /// Permission store for persistent storage of elicitation-related data.
@@ -26,6 +26,7 @@ struct OAuthEntry {
     user_id: ExternalUserId,
     provider: IdentityProvider,
     state_token: String,
+    #[allow(dead_code)]
     created_at: chrono::DateTime<chrono::Utc>,
     expires_at: chrono::DateTime<chrono::Utc>,
     redirect_uri: RedirectUri,
@@ -41,7 +42,10 @@ impl PermissionStore {
     }
 
     /// Save a tool permission.
-    pub async fn save_permission(&self, permission: &ToolPermission) -> ElicitationResult<ToolPermission> {
+    pub async fn save_permission(
+        &self,
+        permission: &ToolPermission,
+    ) -> ElicitationResult<ToolPermission> {
         // Serialize action as just the variant name (e.g., "allow_once"), not a JSON string
         let action_str = match permission.action {
             crate::elicitation::ApprovalAction::AllowOnce => "allow_once",
@@ -60,7 +64,8 @@ impl PermissionStore {
             }
         "#;
 
-        let mut res = self.db
+        let mut res = self
+            .db
             .query(query)
             .bind(("tool_id", permission.tool_id.clone()))
             .bind(("service_id", permission.service_id.clone()))
@@ -76,7 +81,8 @@ impl PermissionStore {
             id: surrealdb::RecordId,
         }
 
-        let created: Vec<Created> = res.take(0)
+        let created: Vec<Created> = res
+            .take(0)
             .map_err(|e| ElicitationError::Database(e.to_string()))?;
 
         let mut result = permission.clone();
@@ -116,7 +122,8 @@ impl PermissionStore {
             LIMIT 1
         "#;
 
-        let mut res = self.db
+        let mut res = self
+            .db
             .query(query)
             .bind(("tool_id", tool_id))
             .bind(("service_id", service_id))
@@ -124,7 +131,8 @@ impl PermissionStore {
             .await
             .map_err(|e| ElicitationError::Database(e.to_string()))?;
 
-        let result: Vec<ToolPermission> = res.take(0)
+        let result: Vec<ToolPermission> = res
+            .take(0)
             .map_err(|e| ElicitationError::Database(e.to_string()))?;
 
         Ok(result.into_iter().next())
@@ -222,13 +230,15 @@ impl PermissionStore {
             ORDER BY created_at DESC
         "#;
 
-        let mut res = self.db
+        let mut res = self
+            .db
             .query(query)
             .bind(("user_id", user_id))
             .await
             .map_err(|e| ElicitationError::Database(e.to_string()))?;
 
-        let permissions: Vec<ToolPermission> = res.take(0)
+        let permissions: Vec<ToolPermission> = res
+            .take(0)
             .map_err(|e| ElicitationError::Database(e.to_string()))?;
 
         Ok(permissions)
@@ -242,13 +252,15 @@ impl PermissionStore {
               AND expires_at < time::now()
         "#;
 
-        let mut res = self.db
+        let mut res = self
+            .db
             .query(query)
             .await
             .map_err(|e| ElicitationError::Database(e.to_string()))?;
 
         // The DELETE statement returns the number of deleted records
-        let count: Vec<serde_json::Value> = res.take(0)
+        let count: Vec<serde_json::Value> = res
+            .take(0)
             .map_err(|e| ElicitationError::Database(e.to_string()))?;
 
         Ok(count.len())
@@ -294,7 +306,10 @@ impl PermissionStore {
     }
 
     /// Retrieve and validate OAuth state.
-    pub async fn get_oauth_state(&self, elicitation_id: &str) -> ElicitationResult<Option<OAuthState>> {
+    pub async fn get_oauth_state(
+        &self,
+        elicitation_id: &str,
+    ) -> ElicitationResult<Option<OAuthState>> {
         let mut state_map = self.oauth_state.lock().await;
 
         if let Some(entry) = state_map.get(elicitation_id) {

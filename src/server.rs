@@ -8,21 +8,20 @@ use tokio::sync::RwLock;
 
 use anyhow::Result;
 use axum::Router;
+use rmcp::transport::streamable_http_server::{
+    StreamableHttpService, session::local::LocalSessionManager,
+};
 use rmcp::{
     ErrorData as McpError,
     handler::server::ServerHandler,
     model::*,
     service::{NotificationContext, Peer, RequestContext, RoleServer},
 };
-use rmcp::transport::streamable_http_server::{
-    StreamableHttpService,
-    session::local::LocalSessionManager,
-};
 
 use crate::auth::{AuthConfig, AuthError, AuthExtractor, UserContext};
-use crate::tools::ToolRegistry;
 use crate::orchestrator::Orchestrator;
 use crate::resources::ResourceError;
+use crate::tools::ToolRegistry;
 
 /// Type alias for HTTP request parts stored in rmcp extensions.
 type HttpParts = http::request::Parts;
@@ -141,7 +140,7 @@ impl McpServer {
 
         if let Some(peer) = self.peer.read().await.as_ref() {
             peer.notify_resource_updated(ResourceUpdatedNotificationParam {
-                uri: uri.to_string().into(),
+                uri: uri.to_string(),
             })
             .await
             .map_err(|e| anyhow::anyhow!("Failed to send notification: {:?}", e))?;
@@ -240,20 +239,24 @@ impl ServerHandler for McpServer {
                 // rmcp stores http::request::Parts in extensions for HTTP transport
                 let (authorization, api_key, ip_address, user_agent) =
                     if let Some(parts) = extensions.get::<HttpParts>() {
-                        let auth = parts.headers
+                        let auth = parts
+                            .headers
                             .get(http::header::AUTHORIZATION)
                             .and_then(|v| v.to_str().ok())
                             .map(|s| s.to_string());
-                        let api_key = parts.headers
+                        let api_key = parts
+                            .headers
                             .get("X-API-Key")
                             .and_then(|v| v.to_str().ok())
                             .map(|s| s.to_string());
-                        let ip = parts.headers
+                        let ip = parts
+                            .headers
                             .get("X-Forwarded-For")
                             .or_else(|| parts.headers.get("X-Real-IP"))
                             .and_then(|v| v.to_str().ok())
                             .map(|s| s.to_string());
-                        let ua = parts.headers
+                        let ua = parts
+                            .headers
                             .get(http::header::USER_AGENT)
                             .and_then(|v| v.to_str().ok())
                             .map(|s| s.to_string());
@@ -262,12 +265,15 @@ impl ServerHandler for McpServer {
                         (None, None, None, None)
                     };
 
-                match extractor.extract_user(
-                    authorization.as_deref(),
-                    api_key.as_deref(),
-                    ip_address,
-                    user_agent,
-                ).await {
+                match extractor
+                    .extract_user(
+                        authorization.as_deref(),
+                        api_key.as_deref(),
+                        ip_address,
+                        user_agent,
+                    )
+                    .await
+                {
                     Ok(ctx) => {
                         tracing::info!(
                             user_id = %ctx.user_id_string(),
@@ -367,11 +373,13 @@ impl ServerHandler for McpServer {
         request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
-        let cursor = request.as_ref().and_then(|r| r.cursor.as_ref().map(|c| c.as_str()));
+        let cursor = request.as_ref().and_then(|r| r.cursor.as_deref());
         let (tools, next_cursor) = self.tool_registry.list_tools(cursor);
-        let mut result = ListToolsResult::default();
-        result.tools = tools;
-        result.next_cursor = next_cursor.map(|c| c.into());
+        let result = ListToolsResult {
+            tools,
+            next_cursor,
+            ..Default::default()
+        };
         std::future::ready(Ok(result))
     }
 
@@ -397,7 +405,10 @@ impl ServerHandler for McpServer {
                 Ok(result) => Ok(result),
                 Err(e) => {
                     // Convert anyhow error to McpError
-                    Err(McpError::internal_error(format!("Tool execution failed: {}", e), None))
+                    Err(McpError::internal_error(
+                        format!("Tool execution failed: {}", e),
+                        None,
+                    ))
                 }
             }
         }
@@ -430,28 +441,40 @@ impl ServerHandler for McpServer {
 
         let forwarder = self.orchestrator.prompt_forwarder().clone();
         let name = request.name.to_string();
-        let arguments = request.arguments.map(|a| {
-            a.into_iter().map(|(k, v)| (k.to_string(), v)).collect()
-        });
+        let arguments = request
+            .arguments
+            .map(|a| a.into_iter().map(|(k, v)| (k.to_string(), v)).collect());
 
         async move {
             match forwarder.get_prompt(&name, arguments).await {
                 Ok(result) => Ok(result),
                 Err(PromptError::NotFound(name)) => {
                     // -32602: Invalid params (per MCP spec for invalid prompt name)
-                    Err(McpError::invalid_params(format!("Prompt not found: {}", name), None))
+                    Err(McpError::invalid_params(
+                        format!("Prompt not found: {}", name),
+                        None,
+                    ))
                 }
                 Err(PromptError::InvalidName(name)) => {
                     // -32602: Invalid params (per MCP spec for invalid prompt name)
-                    Err(McpError::invalid_params(format!("Invalid prompt name: {}", name), None))
+                    Err(McpError::invalid_params(
+                        format!("Invalid prompt name: {}", name),
+                        None,
+                    ))
                 }
                 Err(PromptError::InvalidArguments(msg)) => {
                     // -32602: Invalid params (per MCP spec for missing required arguments)
-                    Err(McpError::invalid_params(format!("Invalid arguments: {}", msg), None))
+                    Err(McpError::invalid_params(
+                        format!("Invalid arguments: {}", msg),
+                        None,
+                    ))
                 }
                 Err(PromptError::Internal(msg)) => {
                     // -32603: Internal error
-                    Err(McpError::internal_error(format!("Failed to get prompt: {}", msg), None))
+                    Err(McpError::internal_error(
+                        format!("Failed to get prompt: {}", msg),
+                        None,
+                    ))
                 }
             }
         }
@@ -463,14 +486,17 @@ impl ServerHandler for McpServer {
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ListPromptsResult, McpError>> + Send + '_ {
         let forwarder = self.orchestrator.prompt_forwarder().clone();
-        let cursor = request.as_ref().and_then(|r| r.cursor.as_ref().map(|c| c.to_string()));
+        let cursor = request
+            .as_ref()
+            .and_then(|r| r.cursor.as_ref().map(|c| c.to_string()));
 
         async move {
             match forwarder.list_prompts(cursor.as_deref()).await {
                 Ok(result) => Ok(result),
-                Err(e) => {
-                    Err(McpError::internal_error(format!("Failed to list prompts: {}", e), None))
-                }
+                Err(e) => Err(McpError::internal_error(
+                    format!("Failed to list prompts: {}", e),
+                    None,
+                )),
             }
         }
     }
@@ -481,14 +507,17 @@ impl ServerHandler for McpServer {
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ListResourcesResult, McpError>> + Send + '_ {
         let forwarder = self.orchestrator.resource_forwarder().clone();
-        let cursor = request.as_ref().and_then(|r| r.cursor.as_ref().map(|c| c.to_string()));
+        let cursor = request
+            .as_ref()
+            .and_then(|r| r.cursor.as_ref().map(|c| c.to_string()));
 
         async move {
             match forwarder.list_resources(None, cursor.as_deref()).await {
                 Ok(result) => Ok(result),
-                Err(e) => {
-                    Err(McpError::internal_error(format!("Failed to list resources: {}", e), None))
-                }
+                Err(e) => Err(McpError::internal_error(
+                    format!("Failed to list resources: {}", e),
+                    None,
+                )),
             }
         }
     }
@@ -499,14 +528,17 @@ impl ServerHandler for McpServer {
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ListResourceTemplatesResult, McpError>> + Send + '_ {
         let forwarder = self.orchestrator.resource_forwarder().clone();
-        let cursor = request.as_ref().and_then(|r| r.cursor.as_ref().map(|c| c.to_string()));
+        let cursor = request
+            .as_ref()
+            .and_then(|r| r.cursor.as_ref().map(|c| c.to_string()));
 
         async move {
             match forwarder.list_templates(None, cursor.as_deref()).await {
                 Ok(result) => Ok(result),
-                Err(e) => {
-                    Err(McpError::internal_error(format!("Failed to list resource templates: {}", e), None))
-                }
+                Err(e) => Err(McpError::internal_error(
+                    format!("Failed to list resource templates: {}", e),
+                    None,
+                )),
             }
         }
     }
@@ -532,11 +564,17 @@ impl ServerHandler for McpServer {
                 }
                 Err(ResourceError::InvalidUri(uri)) => {
                     // -32602: Invalid params (per MCP spec for invalid URI)
-                    Err(McpError::invalid_params(format!("Invalid URI: {}", uri), None))
+                    Err(McpError::invalid_params(
+                        format!("Invalid URI: {}", uri),
+                        None,
+                    ))
                 }
                 Err(ResourceError::Internal(msg)) => {
                     // -32603: Internal error
-                    Err(McpError::internal_error(format!("Failed to read resource: {}", msg), None))
+                    Err(McpError::internal_error(
+                        format!("Failed to read resource: {}", msg),
+                        None,
+                    ))
                 }
             }
         }
@@ -643,9 +681,7 @@ pub async fn start_mcp_http(
     let db = orchestrator.db().clone();
 
     // Create auth extractor if config provided
-    let auth_extractor = auth_config.map(|config| {
-        Arc::new(AuthExtractor::new(config, db))
-    });
+    let auth_extractor = auth_config.map(|config| Arc::new(AuthExtractor::new(config, db)));
 
     let service = StreamableHttpService::new(
         {
@@ -674,9 +710,15 @@ pub async fn start_mcp_http(
     let listener = tokio::net::TcpListener::bind(bind).await?;
 
     if auth_extractor.is_some() {
-        tracing::info!("MCP HTTP server listening on http://{} (auth enabled)", bind);
+        tracing::info!(
+            "MCP HTTP server listening on http://{} (auth enabled)",
+            bind
+        );
     } else {
-        tracing::info!("MCP HTTP server listening on http://{} (anonymous mode)", bind);
+        tracing::info!(
+            "MCP HTTP server listening on http://{} (anonymous mode)",
+            bind
+        );
     }
 
     axum::serve(listener, router).await?;

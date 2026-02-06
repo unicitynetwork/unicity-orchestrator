@@ -3,8 +3,8 @@
 //! This module provides filtering of tools based on user preferences,
 //! including blocked services, trusted services, and trust boosting.
 
-use std::collections::HashSet;
 use anyhow::Result;
+use std::collections::HashSet;
 use surrealdb::engine::any::Any;
 use surrealdb::{RecordId, Surreal};
 
@@ -38,10 +38,7 @@ impl UserToolFilter {
     /// Create a filter from user context by loading their preferences.
     ///
     /// If the user has no preferences, returns a filter that allows all tools.
-    pub async fn from_user_context(
-        db: &Surreal<Any>,
-        ctx: &UserContext,
-    ) -> Result<Self> {
+    pub async fn from_user_context(db: &Surreal<Any>, ctx: &UserContext) -> Result<Self> {
         // Query user preferences
         let user_id = ctx.user_id();
 
@@ -54,14 +51,8 @@ impl UserToolFilter {
 
         match prefs {
             Some(p) => {
-                let blocked_services = p.blocked_services
-                    .unwrap_or_default()
-                    .into_iter()
-                    .collect();
-                let trusted_services = p.trusted_services
-                    .unwrap_or_default()
-                    .into_iter()
-                    .collect();
+                let blocked_services = p.blocked_services.unwrap_or_default().into_iter().collect();
+                let trusted_services = p.trusted_services.unwrap_or_default().into_iter().collect();
 
                 Ok(Self {
                     blocked_services,
@@ -100,6 +91,7 @@ impl UserToolFilter {
     }
 
     /// Filter a list of tool selections, removing those from blocked services.
+    #[allow(dead_code)]
     pub fn filter_selections(&self, selections: Vec<ToolSelection>) -> Vec<ToolSelection> {
         if self.blocked_services.is_empty() {
             return selections;
@@ -118,7 +110,7 @@ impl UserToolFilter {
     ///
     /// This modifies the selections in place, increasing confidence for
     /// tools from trusted services by the given boost factor.
-    pub fn apply_trust_boost(&self, selections: &mut Vec<ToolSelection>, boost: f32) {
+    pub fn apply_trust_boost(&self, selections: &mut [ToolSelection], boost: f32) {
         if self.trusted_services.is_empty() {
             return;
         }
@@ -132,11 +124,13 @@ impl UserToolFilter {
     }
 
     /// Check if any services are blocked.
+    #[allow(dead_code)]
     pub fn has_blocked_services(&self) -> bool {
         !self.blocked_services.is_empty()
     }
 
     /// Check if any services are trusted.
+    #[allow(dead_code)]
     pub fn has_trusted_services(&self) -> bool {
         !self.trusted_services.is_empty()
     }
@@ -233,9 +227,7 @@ mod tests {
             trusted_services: vec!["service:service1".to_string()].into_iter().collect(),
         };
 
-        let mut selections = vec![
-            make_tool_selection("service1", "tool1", 0.95),
-        ];
+        let mut selections = vec![make_tool_selection("service1", "tool1", 0.95)];
 
         filter.apply_trust_boost(&mut selections, 0.1);
 

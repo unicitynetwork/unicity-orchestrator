@@ -1,15 +1,15 @@
+use crate::db::queries::QueryBuilder;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use surrealdb::engine::any::Any;
 use surrealdb::{RecordId, Surreal};
-use crate::db::queries::QueryBuilder;
 
 use embed_anything::{
     config::TextEmbedConfig,
-    embeddings::embed::{Embedder, EmbedderBuilder},
     embed_query,
+    embeddings::embed::{Embedder, EmbedderBuilder},
 };
 use rmcp::model::JsonObject;
 
@@ -90,7 +90,7 @@ impl EmbeddingManager {
 
         // Take the first embedding, or return an error if nothing was produced
         let embedding = results
-            .get(0)
+            .first()
             .map(|d| d.embedding.clone())
             .ok_or_else(|| anyhow::anyhow!("embed_anything returned no embeddings for query"))?;
 
@@ -118,11 +118,17 @@ impl EmbeddingManager {
 
         // Include type information
         if let Some(input_ty) = &tool.input_ty {
-            text_parts.push(format!("Input Type: {}", self.typed_schema_to_text(input_ty)));
+            text_parts.push(format!(
+                "Input Type: {}",
+                self.typed_schema_to_text(input_ty)
+            ));
         }
 
         if let Some(output_ty) = &tool.output_ty {
-            text_parts.push(format!("Output Type: {}", self.typed_schema_to_text(output_ty)));
+            text_parts.push(format!(
+                "Output Type: {}",
+                self.typed_schema_to_text(output_ty)
+            ));
         }
 
         let combined_text = text_parts.join("\n");
@@ -350,13 +356,8 @@ impl EmbeddingManager {
 
         // Delegate to the DB query helper to perform the vector search and
         // map embeddings back to tools.
-        let matches = QueryBuilder::find_tools_by_embedding(
-            &self.db,
-            query_vector,
-            limit,
-            threshold,
-        )
-            .await?;
+        let matches =
+            QueryBuilder::find_tools_by_embedding(&self.db, query_vector, limit, threshold).await?;
 
         let mut results = Vec::new();
 

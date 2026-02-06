@@ -117,6 +117,7 @@ fn expand_env_vars(input: &str) -> String {
     let mut out = String::with_capacity(input.len());
     let mut chars = input.chars().peekable();
 
+    #[allow(clippy::while_let_on_iterator)]
     while let Some(ch) = chars.next() {
         if ch == '$' && matches!(chars.peek(), Some('{')) {
             chars.next(); // consume '{'
@@ -185,6 +186,7 @@ impl McpConfigs {
         Ok(Self(services))
     }
 
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.0.len()
     }
@@ -273,7 +275,10 @@ mod tests {
             } => {
                 assert_eq!(id.as_str(), "test-server");
                 assert_eq!(url, "http://localhost:3000");
-                assert_eq!(headers.get("Authorization"), Some(&"Bearer token".to_string()));
+                assert_eq!(
+                    headers.get("Authorization"),
+                    Some(&"Bearer token".to_string())
+                );
                 assert!(disabled);
                 assert_eq!(auto_approve, Vec::<String>::new());
                 assert_eq!(disabled_tools, vec!["tool3"]);
@@ -299,13 +304,20 @@ mod tests {
         let result = McpServiceConfig::from_json(id, cfg);
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("must have either `command` or `url`"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("must have either `command` or `url`")
+        );
     }
 
     #[test]
     fn test_expand_env_vars() {
         // Test with existing environment variable
-        unsafe { env::set_var("TEST_VAR", "test_value"); }
+        unsafe {
+            env::set_var("TEST_VAR", "test_value");
+        }
 
         let input = "prefix ${TEST_VAR} suffix";
         let result = expand_env_vars(input);
@@ -340,7 +352,9 @@ mod tests {
 
     #[test]
     fn test_expand_server() {
-        unsafe { env::set_var("HOME", "/home/user"); }
+        unsafe {
+            env::set_var("HOME", "/home/user");
+        }
 
         let mut env = BTreeMap::new();
         env.insert("HOME_DIR".to_string(), "${HOME}".to_string());
@@ -365,9 +379,14 @@ mod tests {
         assert_eq!(result.args, vec!["--config", "/home/user/config.json"]);
         assert_eq!(result.env.get("HOME_DIR"), Some(&"/home/user".to_string()));
         assert_eq!(result.url.unwrap(), "http:///home/user:3000");
-        assert_eq!(result.headers.get("Auth"), Some(&"Bearer /home/user/token".to_string()));
+        assert_eq!(
+            result.headers.get("Auth"),
+            Some(&"Bearer /home/user/token".to_string())
+        );
 
-        unsafe { env::remove_var("HOME"); }
+        unsafe {
+            env::remove_var("HOME");
+        }
     }
 
     #[test]
@@ -405,8 +424,12 @@ mod tests {
         env::set_current_dir(&temp_dir).unwrap();
 
         // Clear any existing MCP_CONFIG environment variable
-        unsafe { env::remove_var("MCP_CONFIG"); }
-        unsafe { env::remove_var("XDG_CONFIG_HOME"); }
+        unsafe {
+            env::remove_var("MCP_CONFIG");
+        }
+        unsafe {
+            env::remove_var("XDG_CONFIG_HOME");
+        }
 
         // Ensure no mcp.json exists
         assert!(!PathBuf::from("mcp.json").exists());
@@ -448,12 +471,25 @@ mod tests {
         assert_eq!(result.len(), 2);
 
         // Find stdio and http servers regardless of order
-        let stdio_server = result.0.iter().find(|s| matches!(s, McpServiceConfig::Stdio { .. }));
-        let http_server = result.0.iter().find(|s| matches!(s, McpServiceConfig::Http { .. }));
+        let stdio_server = result
+            .0
+            .iter()
+            .find(|s| matches!(s, McpServiceConfig::Stdio { .. }));
+        let http_server = result
+            .0
+            .iter()
+            .find(|s| matches!(s, McpServiceConfig::Http { .. }));
 
         // Check stdio server
         match stdio_server {
-            Some(McpServiceConfig::Stdio { id, command, args, env, disabled, .. }) => {
+            Some(McpServiceConfig::Stdio {
+                id,
+                command,
+                args,
+                env,
+                disabled,
+                ..
+            }) => {
                 assert_eq!(id.as_str(), "stdio-server");
                 assert_eq!(command, "node");
                 assert_eq!(*args, vec!["server.js".to_string()]);
@@ -465,10 +501,19 @@ mod tests {
 
         // Check http server
         match http_server {
-            Some(McpServiceConfig::Http { id, url, headers, disabled, .. }) => {
+            Some(McpServiceConfig::Http {
+                id,
+                url,
+                headers,
+                disabled,
+                ..
+            }) => {
                 assert_eq!(id.as_str(), "http-server");
                 assert_eq!(url, "http://localhost:3000");
-                assert_eq!(headers.get("Authorization"), Some(&"Bearer token123".to_string()));
+                assert_eq!(
+                    headers.get("Authorization"),
+                    Some(&"Bearer token123".to_string())
+                );
                 assert!(disabled);
             }
             _ => panic!("Expected Http variant"),

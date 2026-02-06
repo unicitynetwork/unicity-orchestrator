@@ -3,19 +3,20 @@
 //! Provides a `ToolHandler` trait for implementing tools and a `ToolRegistry`
 //! for registering and invoking them.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::pin::Pin;
-use std::future::Future;
-use rmcp::model::{Tool as McpTool, JsonObject, CallToolResult};
-use rmcp::service::RequestContext;
-use rmcp::RoleServer;
 use anyhow::Result;
+use rmcp::RoleServer;
+use rmcp::model::{CallToolResult, JsonObject, Tool as McpTool};
+use rmcp::service::RequestContext;
+use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::Arc;
 
 use crate::auth::UserContext;
 
 /// Pagination constants for tools.
 const DEFAULT_PAGE_SIZE: usize = 100;
+#[allow(dead_code)]
 const MAX_PAGE_SIZE: usize = 1000;
 
 /// Context passed to tool handlers during execution.
@@ -97,7 +98,8 @@ impl ToolRegistry {
 
     /// Register a tool handler from a type that implements `ToolHandler`.
     pub fn register_handler<T: ToolHandler + 'static>(mut self, handler: T) -> Self {
-        self.handlers.insert(handler.name().to_string(), Arc::new(handler));
+        self.handlers
+            .insert(handler.name().to_string(), Arc::new(handler));
         self
     }
 
@@ -119,15 +121,14 @@ impl ToolRegistry {
     /// Returns a tuple of (tools, next_cursor).
     pub fn list_tools(&self, cursor: Option<&str>) -> (Vec<McpTool>, Option<String>) {
         // Parse cursor to get offset
-        let offset = cursor
-            .and_then(|c| c.parse::<usize>().ok())
-            .unwrap_or(0);
+        let offset = cursor.and_then(|c| c.parse::<usize>().ok()).unwrap_or(0);
 
         let total = self.handlers.len();
         let next_offset = offset + DEFAULT_PAGE_SIZE;
 
         // Collect tools with pagination
-        let tools: Vec<McpTool> = self.handlers
+        let tools: Vec<McpTool> = self
+            .handlers
             .values()
             .skip(offset)
             .take(DEFAULT_PAGE_SIZE)

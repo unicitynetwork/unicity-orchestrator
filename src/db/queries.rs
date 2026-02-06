@@ -5,15 +5,14 @@
 // alongside the schema and graph engine.
 
 use crate::db::schema::{
-    ApiKeyCreate, ApiKeyRecord, CompatibilityType, CreateToolRecord, ManifestRecord,
-    ServiceCreate, ServiceRecord, ToolCompatibility, ToolRecord, ToolSearchQuery,
-    ToolSearchResult, ToolSequence,
+    ApiKeyCreate, ApiKeyRecord, CompatibilityType, CreateToolRecord, ManifestRecord, ServiceCreate,
+    ServiceRecord, ToolCompatibility, ToolRecord, ToolSearchQuery, ToolSearchResult, ToolSequence,
 };
-use anyhow::{anyhow, Result};
+use anyhow::{Result, anyhow};
 use serde::Deserialize;
 use serde_json::Value;
-use surrealdb::{engine::any::Any, Surreal};
 use surrealdb::RecordId;
+use surrealdb::{Surreal, engine::any::Any};
 
 pub struct QueryBuilder;
 
@@ -23,10 +22,7 @@ impl QueryBuilder {
     /// This is currently a simple CREATE and does not attempt to deduplicate
     /// based on registry or origin. In the future we can switch this to a
     /// true UPSERT keyed by a stable identifier (e.g. registry + name).
-    pub async fn upsert_service(
-        db: &Surreal<Any>,
-        data: &ServiceCreate,
-    ) -> Result<ServiceRecord> {
+    pub async fn upsert_service(db: &Surreal<Any>, data: &ServiceCreate) -> Result<ServiceRecord> {
         let mut res = db
             .query(
                 r#"
@@ -60,10 +56,7 @@ impl QueryBuilder {
     /// This is currently a simple CREATE and does not attempt to deduplicate
     /// tools by (service_id, name). In the future this can be upgraded to
     /// a true UPSERT keyed by that pair.
-    pub async fn upsert_tool(
-        db: &Surreal<Any>,
-        data: &CreateToolRecord,
-    ) -> Result<ToolRecord> {
+    pub async fn upsert_tool(db: &Surreal<Any>, data: &CreateToolRecord) -> Result<ToolRecord> {
         let mut res = db
             .query(
                 r#"
@@ -274,16 +267,15 @@ impl QueryBuilder {
     ) -> Result<()> {
         // For now we simply increment usage_count; we can later track success
         // vs failure separately in a dedicated telemetry table.
-        db
-            .query(
-                r#"
+        db.query(
+            r#"
                 UPDATE tool
                 SET usage_count += 1
                 WHERE id = $id
                 "#,
-            )
-            .bind(("id", tool_id.clone()))
-            .await?;
+        )
+        .bind(("id", tool_id.clone()))
+        .await?;
 
         Ok(())
     }
@@ -432,10 +424,7 @@ impl QueryBuilder {
     }
 
     /// Create a new API key record.
-    pub async fn create_api_key(
-        db: &Surreal<Any>,
-        data: &ApiKeyCreate,
-    ) -> Result<ApiKeyRecord> {
+    pub async fn create_api_key(db: &Surreal<Any>, data: &ApiKeyCreate) -> Result<ApiKeyRecord> {
         let mut res = db
             .query(
                 r#"
@@ -464,10 +453,7 @@ impl QueryBuilder {
     }
 
     /// Update the last_used_at timestamp for an API key.
-    pub async fn update_api_key_last_used(
-        db: &Surreal<Any>,
-        key_id: &RecordId,
-    ) -> Result<()> {
+    pub async fn update_api_key_last_used(db: &Surreal<Any>, key_id: &RecordId) -> Result<()> {
         db.query(
             r#"
                 UPDATE api_key
@@ -482,10 +468,7 @@ impl QueryBuilder {
     }
 
     /// Deactivate (revoke) an API key.
-    pub async fn deactivate_api_key(
-        db: &Surreal<Any>,
-        key_id: &RecordId,
-    ) -> Result<()> {
+    pub async fn deactivate_api_key(db: &Surreal<Any>, key_id: &RecordId) -> Result<()> {
         db.query(
             r#"
                 UPDATE api_key
@@ -500,10 +483,7 @@ impl QueryBuilder {
     }
 
     /// Deactivate (revoke) an API key by its prefix.
-    pub async fn deactivate_api_key_by_prefix(
-        db: &Surreal<Any>,
-        key_prefix: &str,
-    ) -> Result<bool> {
+    pub async fn deactivate_api_key_by_prefix(db: &Surreal<Any>, key_prefix: &str) -> Result<bool> {
         let mut res = db
             .query(
                 r#"
@@ -522,9 +502,7 @@ impl QueryBuilder {
 
     /// List all API keys (for administrative purposes).
     /// Returns keys sorted by creation date, most recent first.
-    pub async fn list_api_keys(
-        db: &Surreal<Any>,
-    ) -> Result<Vec<ApiKeyRecord>> {
+    pub async fn list_api_keys(db: &Surreal<Any>) -> Result<Vec<ApiKeyRecord>> {
         let mut res = db
             .query(
                 r#"
@@ -539,9 +517,7 @@ impl QueryBuilder {
     }
 
     /// List active API keys only.
-    pub async fn list_active_api_keys(
-        db: &Surreal<Any>,
-    ) -> Result<Vec<ApiKeyRecord>> {
+    pub async fn list_active_api_keys(db: &Surreal<Any>) -> Result<Vec<ApiKeyRecord>> {
         let mut res = db
             .query(
                 r#"
@@ -559,11 +535,14 @@ impl QueryBuilder {
 
 #[cfg(test)]
 mod tests {
-    use crate::db::connection::create_connection;
     use crate::db::connection::DatabaseConfig;
+    use crate::db::connection::create_connection;
+    use crate::db::{
+        CompatibilityType, CreateToolRecord, QueryBuilder, ServiceCreate, ServiceOrigin,
+        ToolSearchQuery, TypedSchema,
+    };
     use serde_json::json;
     use surrealdb::RecordId;
-    use crate::db::{CompatibilityType, CreateToolRecord, QueryBuilder, ServiceCreate, ServiceOrigin, ToolSearchQuery, TypedSchema};
 
     #[tokio::test]
     async fn test_upsert_service() {
@@ -590,7 +569,11 @@ mod tests {
 
         // Test upsert_service
         let result = QueryBuilder::upsert_service(&db, &service_data).await;
-        assert!(result.is_ok(), "Failed to upsert service: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to upsert service: {:?}",
+            result.err()
+        );
 
         let service = result.unwrap();
         assert_eq!(service.name, Some("test_service".to_string()));
@@ -623,7 +606,9 @@ mod tests {
             origin: ServiceOrigin::StaticConfig,
             registry_id: None,
         };
-        let service = QueryBuilder::upsert_service(&db, &service_data).await.unwrap();
+        let service = QueryBuilder::upsert_service(&db, &service_data)
+            .await
+            .unwrap();
 
         // Create test tool data
         let mut input_schema = serde_json::Map::new();
@@ -689,7 +674,9 @@ mod tests {
             origin: ServiceOrigin::StaticConfig,
             registry_id: None,
         };
-        let service = QueryBuilder::upsert_service(&db, &service_data).await.unwrap();
+        let service = QueryBuilder::upsert_service(&db, &service_data)
+            .await
+            .unwrap();
 
         let mut input_schema = serde_json::Map::new();
         input_schema.insert("type".to_string(), json!("string"));
@@ -708,7 +695,11 @@ mod tests {
 
         // Test find_tool_by_id
         let result = QueryBuilder::find_tool_by_id(&db, created_tool.id.clone()).await;
-        assert!(result.is_ok(), "Failed to find tool by id: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to find tool by id: {:?}",
+            result.err()
+        );
 
         let found_tool = result.unwrap();
         assert!(found_tool.is_some(), "Tool should be found");
@@ -752,7 +743,10 @@ mod tests {
         assert!(result.is_ok());
 
         let tools = result.unwrap();
-        assert!(tools.is_empty(), "Should return empty result when no embeddings exist");
+        assert!(
+            tools.is_empty(),
+            "Should return empty result when no embeddings exist"
+        );
     }
 
     #[tokio::test]
@@ -772,7 +766,10 @@ mod tests {
         assert!(result.is_ok());
 
         let tools = result.unwrap();
-        assert!(tools.is_empty(), "Should return empty result when start tool doesn't exist");
+        assert!(
+            tools.is_empty(),
+            "Should return empty result when start tool doesn't exist"
+        );
     }
 
     #[tokio::test]
@@ -792,7 +789,10 @@ mod tests {
         assert!(result.is_ok());
 
         let patterns = result.unwrap();
-        assert!(patterns.is_empty(), "Should return empty result when no patterns exist");
+        assert!(
+            patterns.is_empty(),
+            "Should return empty result when no patterns exist"
+        );
     }
 
     #[tokio::test]
@@ -849,7 +849,9 @@ mod tests {
             origin: ServiceOrigin::StaticConfig,
             registry_id: None,
         };
-        let service = QueryBuilder::upsert_service(&db, &service_data).await.unwrap();
+        let service = QueryBuilder::upsert_service(&db, &service_data)
+            .await
+            .unwrap();
 
         let mut input_schema = serde_json::Map::new();
         input_schema.insert("type".to_string(), json!("string"));
@@ -868,10 +870,17 @@ mod tests {
 
         // Test update_tool_usage
         let result = QueryBuilder::update_tool_usage(&db, &created_tool.id, true).await;
-        assert!(result.is_ok(), "Failed to update tool usage: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to update tool usage: {:?}",
+            result.err()
+        );
 
         // Verify the usage count was incremented
-        let updated_tool = QueryBuilder::find_tool_by_id(&db, created_tool.id).await.unwrap().unwrap();
+        let updated_tool = QueryBuilder::find_tool_by_id(&db, created_tool.id)
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(updated_tool.usage_count, 1);
     }
 
@@ -896,7 +905,9 @@ mod tests {
             origin: ServiceOrigin::StaticConfig,
             registry_id: None,
         };
-        let service = QueryBuilder::upsert_service(&db, &service_data).await.unwrap();
+        let service = QueryBuilder::upsert_service(&db, &service_data)
+            .await
+            .unwrap();
 
         let mut input_schema = serde_json::Map::new();
         input_schema.insert("type".to_string(), json!("string"));
@@ -933,15 +944,26 @@ mod tests {
             CompatibilityType::DataFlow,
             0.9,
             Some("Test compatibility".to_string()),
-        ).await;
-        assert!(result.is_ok(), "Failed to create compatibility edge: {:?}", result.err());
+        )
+        .await;
+        assert!(
+            result.is_ok(),
+            "Failed to create compatibility edge: {:?}",
+            result.err()
+        );
 
         let compatibility = result.unwrap();
         assert_eq!(compatibility.r#in, tool1.id);
         assert_eq!(compatibility.out, tool2.id);
-        assert!(matches!(compatibility.compatibility_type, CompatibilityType::DataFlow));
+        assert!(matches!(
+            compatibility.compatibility_type,
+            CompatibilityType::DataFlow
+        ));
         assert_eq!(compatibility.confidence, 0.9);
-        assert_eq!(compatibility.reasoning, Some("Test compatibility".to_string()));
+        assert_eq!(
+            compatibility.reasoning,
+            Some("Test compatibility".to_string())
+        );
         assert!(compatibility.created_at.is_some());
     }
 
@@ -962,7 +984,10 @@ mod tests {
         assert!(result.is_ok());
 
         let manifests = result.unwrap();
-        assert!(manifests.is_empty(), "Should return empty result when no manifests exist");
+        assert!(
+            manifests.is_empty(),
+            "Should return empty result when no manifests exist"
+        );
     }
 
     #[tokio::test]
@@ -985,8 +1010,13 @@ mod tests {
         let hash = "test_hash_123";
 
         // Test sync_manifest_to_db
-        let result = QueryBuilder::sync_manifest_to_db(&db, &registry_id, &manifest_content, hash).await;
-        assert!(result.is_ok(), "Failed to sync manifest: {:?}", result.err());
+        let result =
+            QueryBuilder::sync_manifest_to_db(&db, &registry_id, &manifest_content, hash).await;
+        assert!(
+            result.is_ok(),
+            "Failed to sync manifest: {:?}",
+            result.err()
+        );
 
         let manifest = result.unwrap();
         assert_eq!(manifest.registry_id, registry_id);
@@ -1014,8 +1044,13 @@ mod tests {
         let hash = "minimal_hash";
 
         // Test with minimal manifest content (no name or version)
-        let result = QueryBuilder::sync_manifest_to_db(&db, &registry_id, &manifest_content, hash).await;
-        assert!(result.is_ok(), "Failed to sync minimal manifest: {:?}", result.err());
+        let result =
+            QueryBuilder::sync_manifest_to_db(&db, &registry_id, &manifest_content, hash).await;
+        assert!(
+            result.is_ok(),
+            "Failed to sync minimal manifest: {:?}",
+            result.err()
+        );
 
         let manifest = result.unwrap();
         assert_eq!(manifest.name, "unknown");

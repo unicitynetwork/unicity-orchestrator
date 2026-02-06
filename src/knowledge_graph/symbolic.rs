@@ -1,9 +1,9 @@
-use std::cmp::PartialEq;
-use anyhow::{Result};
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use anyhow::Result;
 use rmcp::model::JsonObject;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::cmp::PartialEq;
+use std::collections::HashMap;
 use surrealdb::engine::any::Any;
 use surrealdb::{RecordId, Surreal};
 
@@ -48,7 +48,11 @@ pub enum SymbolicExpression {
     /// Quantified expression (for all, exists)
     Quantified(Quantifier, String, Box<SymbolicExpression>),
     /// Comparison
-    Comparison(ComparisonOp, Box<SymbolicExpression>, Box<SymbolicExpression>),
+    Comparison(
+        ComparisonOp,
+        Box<SymbolicExpression>,
+        Box<SymbolicExpression>,
+    ),
     /// Variable reference
     Variable(String),
     /// Literal value
@@ -216,16 +220,24 @@ impl SymbolicReasoner {
         // Add deterministic query facts
         self.add_fact_to_memory(
             "user_query_text",
-            vec![SymbolicExpression::Literal(LiteralValue::String(query.to_string()))],
+            vec![SymbolicExpression::Literal(LiteralValue::String(
+                query.to_string(),
+            ))],
             1.0,
         )?;
 
         // Add context key/value facts
         for (key, value) in context.iter() {
             let lit = match value {
-                serde_json::Value::String(s) => SymbolicExpression::Literal(LiteralValue::String(s.clone())),
-                serde_json::Value::Number(n) => SymbolicExpression::Literal(LiteralValue::Number(n.as_f64().unwrap_or(0.0))),
-                serde_json::Value::Bool(b) => SymbolicExpression::Literal(LiteralValue::Boolean(*b)),
+                serde_json::Value::String(s) => {
+                    SymbolicExpression::Literal(LiteralValue::String(s.clone()))
+                }
+                serde_json::Value::Number(n) => {
+                    SymbolicExpression::Literal(LiteralValue::Number(n.as_f64().unwrap_or(0.0)))
+                }
+                serde_json::Value::Bool(b) => {
+                    SymbolicExpression::Literal(LiteralValue::Boolean(*b))
+                }
                 _ => continue,
             };
 
@@ -245,38 +257,37 @@ impl SymbolicReasoner {
         }
 
         // Run inference
-        let inferences = self.rule_engine.forward_chain(&self.rules, &mut self.working_memory)?;
+        let inferences = self
+            .rule_engine
+            .forward_chain(&self.rules, &mut self.working_memory)?;
 
         // Extract tool selections from inferences
         let mut selections = Vec::new();
 
         for inference in inferences {
-            if let SymbolicExpression::Fact(fact) = inference {
-                if fact.predicate == "tool_selected" {
-                    if let (
-                        Some(SymbolicExpression::Literal(LiteralValue::String(tool_name))),
-                        Some(SymbolicExpression::Literal(LiteralValue::Number(confidence))),
-                        Some(SymbolicExpression::Literal(LiteralValue::String(reasoning))),
-                    ) = (
-                        fact.arguments.get(0),
-                        fact.arguments.get(1),
-                        fact.arguments.get(2),
-                    ) {
-                        // Resolve the tool name to a concrete ToolRecord so we can attach a RecordId.
-                        if let Some(tool_rec) =
-                            available_tools.iter().find(|t| &t.name == tool_name)
-                        {
-                            selections.push(ToolSelection {
-                                tool_id: tool_rec.id.clone(),
-                                tool_name: tool_rec.name.clone(),
-                                service_id: tool_rec.service_id.clone(),
-                                confidence: *confidence as f32,
-                                reasoning: reasoning.clone(),
-                                dependencies: vec![],
-                                estimated_cost: None,
-                            });
-                        }
-                    }
+            if let SymbolicExpression::Fact(fact) = inference
+                && fact.predicate == "tool_selected"
+                && let (
+                    Some(SymbolicExpression::Literal(LiteralValue::String(tool_name))),
+                    Some(SymbolicExpression::Literal(LiteralValue::Number(confidence))),
+                    Some(SymbolicExpression::Literal(LiteralValue::String(reasoning))),
+                ) = (
+                    fact.arguments.first(),
+                    fact.arguments.get(1),
+                    fact.arguments.get(2),
+                )
+            {
+                // Resolve the tool name to a concrete ToolRecord so we can attach a RecordId.
+                if let Some(tool_rec) = available_tools.iter().find(|t| &t.name == tool_name) {
+                    selections.push(ToolSelection {
+                        tool_id: tool_rec.id.clone(),
+                        tool_name: tool_rec.name.clone(),
+                        service_id: tool_rec.service_id.clone(),
+                        confidence: *confidence as f32,
+                        reasoning: reasoning.clone(),
+                        dependencies: vec![],
+                        estimated_cost: None,
+                    });
                 }
             }
         }
@@ -325,7 +336,7 @@ impl SymbolicReasoner {
         available_tools: &[crate::db::schema::ToolRecord],
         constraints: Option<PlanningConstraints>,
     ) -> Result<Option<ToolPlan>> {
-        let constraints = constraints.unwrap_or_else(PlanningConstraints::default);
+        let constraints = constraints.unwrap_or_default();
 
         let plan = self
             .plan_tool_sequence(goal, available_tools, &constraints)
@@ -338,7 +349,12 @@ impl SymbolicReasoner {
         }
     }
 
-    fn add_fact_to_memory(&mut self, predicate: &str, arguments: Vec<SymbolicExpression>, confidence: f32) -> Result<()> {
+    fn add_fact_to_memory(
+        &mut self,
+        predicate: &str,
+        arguments: Vec<SymbolicExpression>,
+        confidence: f32,
+    ) -> Result<()> {
         let fact = Fact {
             predicate: predicate.to_string(),
             arguments,
@@ -362,14 +378,16 @@ impl SymbolicReasoner {
             success_rate: 1.0, // Would need to track this separately
         };
 
-        self.working_memory.tool_states.insert(tool.name.clone(), tool_state);
+        self.working_memory
+            .tool_states
+            .insert(tool.name.clone(), tool_state);
 
         // Add tool properties as facts
         self.add_fact_to_memory(
             "tool_exists",
-            vec![
-                SymbolicExpression::Literal(LiteralValue::String(tool.name.clone()))
-            ],
+            vec![SymbolicExpression::Literal(LiteralValue::String(
+                tool.name.clone(),
+            ))],
             1.0,
         )?;
 
@@ -378,7 +396,7 @@ impl SymbolicReasoner {
                 "tool_input_type",
                 vec![
                     SymbolicExpression::Literal(LiteralValue::String(tool.name.clone())),
-                    SymbolicExpression::Literal(LiteralValue::String(input_ty.schema_type.clone()))
+                    SymbolicExpression::Literal(LiteralValue::String(input_ty.schema_type.clone())),
                 ],
                 1.0,
             )?;
@@ -389,7 +407,9 @@ impl SymbolicReasoner {
                 "tool_output_type",
                 vec![
                     SymbolicExpression::Literal(LiteralValue::String(tool.name.clone())),
-                    SymbolicExpression::Literal(LiteralValue::String(output_ty.schema_type.clone()))
+                    SymbolicExpression::Literal(LiteralValue::String(
+                        output_ty.schema_type.clone(),
+                    )),
                 ],
                 1.0,
             )?;
@@ -452,10 +472,13 @@ impl SymbolicReasoner {
 #[derive(Debug, Clone)]
 pub struct PlanningConstraints {
     pub max_steps: u32,
+    #[allow(dead_code)]
     pub timeout_seconds: u32, // TODO
     pub allowed_tools: Option<Vec<String>>,
     pub forbidden_tools: Option<Vec<String>>,
+    #[allow(dead_code)]
     pub max_cost: Option<f32>,
+    #[allow(dead_code)]
     pub requirements: Vec<String>,
 }
 
@@ -543,41 +566,41 @@ impl RuleEngine {
                 // Special case: if the rule has a single fact antecedent, we try to
                 // perform simple variable unification and instantiate the consequents
                 // for each matching binding.
-                if rule.antecedents.len() == 1 {
-                    if let SymbolicExpression::Fact(pattern_fact) = &rule.antecedents[0] {
-                        if let Some(existing_facts) = memory.facts.get(&pattern_fact.predicate) {
-                            // Clone the facts so we don't hold an immutable borrow on
-                            // `memory.facts` while we potentially insert new facts into it.
-                            let existing_facts = existing_facts.clone();
-                            for concrete in &existing_facts {
-                                if let Some(bindings) = self.unify_fact(pattern_fact, concrete) {
-                                    for consequent in &rule.consequents {
-                                        if let SymbolicExpression::Fact(cf) = consequent {
-                                            let instantiated = self.substitute_fact(cf, &bindings);
+                if rule.antecedents.len() == 1
+                    && let SymbolicExpression::Fact(pattern_fact) = &rule.antecedents[0]
+                {
+                    if let Some(existing_facts) = memory.facts.get(&pattern_fact.predicate) {
+                        // Clone the facts so we don't hold an immutable borrow on
+                        // `memory.facts` while we potentially insert new facts into it.
+                        let existing_facts = existing_facts.clone();
+                        for concrete in &existing_facts {
+                            if let Some(bindings) = self.unify_fact(pattern_fact, concrete) {
+                                for consequent in &rule.consequents {
+                                    if let SymbolicExpression::Fact(cf) = consequent {
+                                        let instantiated = self.substitute_fact(cf, &bindings);
 
-                                            let entry = memory
-                                                .facts
-                                                .entry(instantiated.predicate.clone())
-                                                .or_default();
+                                        let entry = memory
+                                            .facts
+                                            .entry(instantiated.predicate.clone())
+                                            .or_default();
 
-                                            let exists = entry
-                                                .iter()
-                                                .any(|existing| self.facts_match(&instantiated, existing));
+                                        let exists = entry.iter().any(|existing| {
+                                            self.facts_match(&instantiated, existing)
+                                        });
 
-                                            if !exists {
-                                                entry.push(instantiated.clone());
-                                                new_facts.push(SymbolicExpression::Fact(instantiated));
-                                                changed = true;
-                                            }
+                                        if !exists {
+                                            entry.push(instantiated.clone());
+                                            new_facts.push(SymbolicExpression::Fact(instantiated));
+                                            changed = true;
                                         }
                                     }
                                 }
                             }
                         }
-
-                        // We've handled this rule via unification; move to next rule.
-                        continue;
                     }
+
+                    // We've handled this rule via unification; move to next rule.
+                    continue;
                 }
 
                 // Default behaviour: boolean-style evaluation of antecedents without
@@ -586,10 +609,7 @@ impl RuleEngine {
                 if self.evaluate_antecedents(&rule.antecedents, memory)? {
                     for consequent in &rule.consequents {
                         if let SymbolicExpression::Fact(fact) = consequent {
-                            let entry = memory
-                                .facts
-                                .entry(fact.predicate.clone())
-                                .or_default();
+                            let entry = memory.facts.entry(fact.predicate.clone()).or_default();
 
                             let exists = entry
                                 .iter()
@@ -630,15 +650,15 @@ impl RuleEngine {
 
                     // Apply planning constraints based on tool name, if we have one.
                     if let Some(tool_name) = &tool_name_opt {
-                        if let Some(allowed) = &problem.constraints.allowed_tools {
-                            if !allowed.contains(tool_name) {
-                                continue 'rules;
-                            }
+                        if let Some(allowed) = &problem.constraints.allowed_tools
+                            && !allowed.contains(tool_name)
+                        {
+                            continue 'rules;
                         }
-                        if let Some(forbidden) = &problem.constraints.forbidden_tools {
-                            if forbidden.contains(tool_name) {
-                                continue 'rules;
-                            }
+                        if let Some(forbidden) = &problem.constraints.forbidden_tools
+                            && forbidden.contains(tool_name)
+                        {
+                            continue 'rules;
                         }
                     }
 
@@ -652,10 +672,10 @@ impl RuleEngine {
 
                             // Add new sub-goals from rule antecedents
                             for antecedent in &rule.antecedents {
-                                if let SymbolicExpression::Fact(fact) = antecedent {
-                                    if fact.predicate.starts_with("require_") {
-                                        goal_stack.push(fact.predicate.clone());
-                                    }
+                                if let SymbolicExpression::Fact(fact) = antecedent
+                                    && fact.predicate.starts_with("require_")
+                                {
+                                    goal_stack.push(fact.predicate.clone());
                                 }
                             }
 
@@ -687,20 +707,19 @@ impl RuleEngine {
     ///     use_tool("tool_name")
     /// so that the planner can map this rule to a concrete tool.
     fn extract_tool_name_from_rule(&self, rule: &SymbolicRule) -> Option<String> {
-        let exprs = rule
-            .consequents
-            .iter()
-            .chain(rule.antecedents.iter());
+        let exprs = rule.consequents.iter().chain(rule.antecedents.iter());
 
         for expr in exprs {
-            if let SymbolicExpression::Fact(Fact { predicate, arguments, .. }) = expr {
-                if predicate == "use_tool" {
-                    if let Some(SymbolicExpression::Literal(LiteralValue::String(name))) =
-                        arguments.get(0)
-                    {
-                        return Some(name.clone());
-                    }
-                }
+            if let SymbolicExpression::Fact(Fact {
+                predicate,
+                arguments,
+                ..
+            }) = expr
+                && predicate == "use_tool"
+                && let Some(SymbolicExpression::Literal(LiteralValue::String(name))) =
+                    arguments.first()
+            {
+                return Some(name.clone());
             }
         }
 
@@ -749,9 +768,7 @@ impl RuleEngine {
                 }
                 Ok(false)
             }
-            SymbolicExpression::Not(expr) => {
-                Ok(!self.evaluate_expression(expr, memory)?)
-            }
+            SymbolicExpression::Not(expr) => Ok(!self.evaluate_expression(expr, memory)?),
             _ => Ok(true), // Non-fact expressions are treated as true for now.
         }
     }
@@ -790,11 +807,7 @@ impl RuleEngine {
     /// Attempt to unify a pattern fact with a concrete fact, producing a simple
     /// variable binding environment if successful. This supports rules of the form
     /// `tool_exists(T) => tool_selected(T, ...)`.
-    fn unify_fact(
-        &self,
-        pattern: &Fact,
-        concrete: &Fact,
-    ) -> Option<HashMap<String, LiteralValue>> {
+    fn unify_fact(&self, pattern: &Fact, concrete: &Fact) -> Option<HashMap<String, LiteralValue>> {
         if pattern.predicate != concrete.predicate {
             return None;
         }
@@ -838,11 +851,7 @@ impl RuleEngine {
 
     /// Instantiate a fact by substituting any `Variable` arguments using the provided
     /// bindings. Arguments that are not variables are cloned as-is.
-    fn substitute_fact(
-        &self,
-        fact: &Fact,
-        bindings: &HashMap<String, LiteralValue>,
-    ) -> Fact {
+    fn substitute_fact(&self, fact: &Fact, bindings: &HashMap<String, LiteralValue>) -> Fact {
         let mut new_args = Vec::with_capacity(fact.arguments.len());
 
         for arg in &fact.arguments {
@@ -871,17 +880,13 @@ impl RuleEngine {
     /// Higher-level filtering based on planning constraints and available tools is handled
     /// by the caller (e.g. in `backward_chain`), so this function answers only the question:
     /// "does this rule conceptually relate to the goal?".
-    fn can_achieve_goal(
-        &self,
-        rule: &SymbolicRule,
-        goal: &str,
-    ) -> bool {
+    fn can_achieve_goal(&self, rule: &SymbolicRule, goal: &str) -> bool {
         // Check if rule's consequents can achieve the goal
         for consequent in &rule.consequents {
-            if let SymbolicExpression::Fact(fact) = consequent {
-                if fact.predicate.contains(goal) || goal.contains(&fact.predicate) {
-                    return true;
-                }
+            if let SymbolicExpression::Fact(fact) = consequent
+                && (fact.predicate.contains(goal) || goal.contains(&fact.predicate))
+            {
+                return true;
             }
         }
         false
@@ -895,22 +900,24 @@ impl RuleEngine {
         problem: &PlanningProblem,
     ) -> Result<PlanStep> {
         // Derive a tool name from the rule.
-        let tool_name = self
-            .extract_tool_name_from_rule(rule)
-            .ok_or_else(|| anyhow::Error::msg(format!(
+        let tool_name = self.extract_tool_name_from_rule(rule).ok_or_else(|| {
+            anyhow::Error::msg(format!(
                 "Rule '{}' has no use_tool(\"...\") fact to derive a tool for planning",
                 rule.name
-            )))?;
+            ))
+        })?;
 
         // Look up the concrete tool in the planning problem.
         let tool = problem
             .available_tools
             .iter()
             .find(|t| t.name == tool_name)
-            .ok_or_else(|| anyhow::Error::msg(format!(
-                "No tool found with name '{}' for planning",
-                tool_name
-            )))?;
+            .ok_or_else(|| {
+                anyhow::Error::msg(format!(
+                    "No tool found with name '{}' for planning",
+                    tool_name
+                ))
+            })?;
 
         Ok(PlanStep {
             step_number,

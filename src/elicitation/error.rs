@@ -68,7 +68,9 @@ impl fmt::Display for ElicitationError {
             Self::Canceled => write!(f, "User canceled the elicitation request"),
             Self::Expired => write!(f, "The elicitation has expired"),
             Self::NotFound(id) => write!(f, "Elicitation not found: {}", id),
-            Self::UrlElicitationRequired { message, provider, .. } => {
+            Self::UrlElicitationRequired {
+                message, provider, ..
+            } => {
                 write!(f, "URL elicitation required for {}: {}", provider, message)
             }
             Self::Database(msg) => write!(f, "Database error: {}", msg),
@@ -97,7 +99,11 @@ impl ElicitationError {
         use rmcp::model::ErrorCode;
 
         match self {
-            Self::UrlElicitationRequired { message, url, provider } => {
+            Self::UrlElicitationRequired {
+                message,
+                url,
+                provider,
+            } => {
                 // Create error data with the URL for the client
                 let data = serde_json::json!({
                     "url": url,
@@ -109,43 +115,31 @@ impl ElicitationError {
                     Some(data),
                 )
             }
-            Self::UnsupportedMode(msg) => {
-                rmcp::ErrorData::invalid_params(msg.clone(), None)
-            }
+            Self::UnsupportedMode(msg) => rmcp::ErrorData::invalid_params(msg.clone(), None),
             Self::InvalidSchema(msg) => {
                 rmcp::ErrorData::invalid_params(format!("Invalid schema: {}", msg), None)
             }
             Self::MissingField(field) => {
                 rmcp::ErrorData::invalid_params(format!("Missing field: {}", field), None)
             }
-            Self::Declined => {
-                rmcp::ErrorData::new(
-                    ErrorCode(-32001),
-                    "User declined the request".to_string(),
-                    None,
-                )
-            }
-            Self::Canceled => {
-                rmcp::ErrorData::new(
-                    ErrorCode(-32001),
-                    "User canceled the request".to_string(),
-                    None,
-                )
-            }
+            Self::Declined => rmcp::ErrorData::new(
+                ErrorCode(-32001),
+                "User declined the request".to_string(),
+                None,
+            ),
+            Self::Canceled => rmcp::ErrorData::new(
+                ErrorCode(-32001),
+                "User canceled the request".to_string(),
+                None,
+            ),
             Self::Expired => {
-                rmcp::ErrorData::new(
-                    ErrorCode(-32001),
-                    "Elicitation expired".to_string(),
-                    None,
-                )
+                rmcp::ErrorData::new(ErrorCode(-32001), "Elicitation expired".to_string(), None)
             }
-            Self::NotFound(id) => {
-                rmcp::ErrorData::new(
-                    ErrorCode(-32002),
-                    format!("Elicitation not found: {}", id),
-                    None,
-                )
-            }
+            Self::NotFound(id) => rmcp::ErrorData::new(
+                ErrorCode(-32002),
+                format!("Elicitation not found: {}", id),
+                None,
+            ),
             Self::Database(msg) | Self::Internal(msg) => {
                 rmcp::ErrorData::internal_error(msg.clone(), None)
             }

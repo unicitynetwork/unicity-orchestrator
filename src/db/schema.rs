@@ -1,8 +1,8 @@
-use serde::{Deserialize, Serialize};
-use surrealdb::{RecordId, sql::Datetime};
-use std::collections::HashMap;
 use rmcp::model::{Icon, JsonObject};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
+use surrealdb::{RecordId, sql::Datetime};
 
 use crate::types::{ApiKeyHash, ApiKeyPrefix};
 
@@ -133,7 +133,6 @@ fn default_schema_type() -> String {
 }
 
 impl TypedSchema {
-
     /// Construct a `TypedSchema` from a JSON Schema-like value.
     ///
     /// This version expects a JsonObject (serde_json::Map<String, Value>)
@@ -153,14 +152,15 @@ impl TypedSchema {
                             }
                         }
 
-                        let required = schema
-                            .get("required")
-                            .and_then(|v| v.as_array())
-                            .map(|arr| {
-                                arr.iter()
-                                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                                    .collect::<Vec<_>>()
-                            });
+                        let required =
+                            schema
+                                .get("required")
+                                .and_then(|v| v.as_array())
+                                .map(|arr| {
+                                    arr.iter()
+                                        .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                                        .collect::<Vec<_>>()
+                                });
 
                         TypedSchema {
                             schema_type: "object".to_string(),
@@ -171,10 +171,7 @@ impl TypedSchema {
                         }
                     }
                     "array" => {
-                        let item_schema = schema
-                            .get("items")
-                            .map(Self::from_value)
-                            .map(Box::new);
+                        let item_schema = schema.get("items").map(Self::from_value).map(Box::new);
 
                         TypedSchema {
                             schema_type: "array".to_string(),
@@ -256,10 +253,7 @@ impl TypedSchema {
             }
         // 4) infer `array` from items
         } else if schema.get("items").is_some() {
-            let item_schema = schema
-                .get("items")
-                .map(Self::from_value)
-                .map(Box::new);
+            let item_schema = schema.get("items").map(Self::from_value).map(Box::new);
 
             TypedSchema {
                 schema_type: "array".to_string(),

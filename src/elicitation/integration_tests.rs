@@ -53,9 +53,7 @@ impl ClientHandler for TestClient {
         ClientInfo {
             meta: None,
             protocol_version: ProtocolVersion::V_2025_06_18,
-            capabilities: ClientCapabilities::builder()
-                .enable_elicitation()
-                .build(),
+            capabilities: ClientCapabilities::builder().enable_elicitation().build(),
             client_info: Implementation {
                 name: "test-client".into(),
                 version: "1.0.0".into(),
@@ -79,10 +77,7 @@ impl ClientHandler for TestClient {
             // Store the received request for later assertions
             received.write().await.push(request);
 
-            Ok(CreateElicitationResult {
-                action,
-                content,
-            })
+            Ok(CreateElicitationResult { action, content })
         }
     }
 
@@ -241,15 +236,20 @@ async fn test_elicitation_accept_flow() {
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
         let schema = ElicitationSchema::builder()
-            .required_enum_schema("action", EnumSchema::builder(vec![
-                "allow_once".to_string(),
-                "always_allow".to_string(),
-                "deny".to_string(),
-            ]).build())
+            .required_enum_schema(
+                "action",
+                EnumSchema::builder(vec![
+                    "allow_once".to_string(),
+                    "always_allow".to_string(),
+                    "deny".to_string(),
+                ])
+                .build(),
+            )
             .build()
             .unwrap();
 
-        let result = running.service()
+        let result = running
+            .service()
             .send_elicitation("Please approve this tool execution", schema)
             .await;
 
@@ -257,18 +257,15 @@ async fn test_elicitation_accept_flow() {
     });
 
     // Start client (reads from client_read, writes to client_write)
-    let client_handle = tokio::spawn(async move {
-        client.serve((client_read, client_write)).await
-    });
+    let client_handle =
+        tokio::spawn(async move { client.serve((client_read, client_write)).await });
 
     // Wait for both with timeout
-    let result = tokio::time::timeout(
-        tokio::time::Duration::from_secs(5),
-        async {
-            let (server_result, _client_result) = tokio::join!(server_handle, client_handle);
-            server_result
-        }
-    ).await;
+    let result = tokio::time::timeout(tokio::time::Duration::from_secs(5), async {
+        let (server_result, _client_result) = tokio::join!(server_handle, client_handle);
+        server_result
+    })
+    .await;
 
     match result {
         Ok(Ok((_, Ok(elicitation_result)))) => {
@@ -277,7 +274,12 @@ async fn test_elicitation_accept_flow() {
             assert!(elicitation_result.content.is_some());
 
             let content = elicitation_result.content.unwrap();
-            assert_eq!(content.get("action").and_then(|v: &serde_json::Value| v.as_str()), Some("allow_once"));
+            assert_eq!(
+                content
+                    .get("action")
+                    .and_then(|v: &serde_json::Value| v.as_str()),
+                Some("allow_once")
+            );
 
             // Verify the client received the elicitation
             let received = received_elicitations.read().await;
@@ -309,24 +311,22 @@ async fn test_elicitation_decline_flow() {
             .build()
             .unwrap();
 
-        let result = running.service()
+        let result = running
+            .service()
             .send_elicitation("Why do you need access?", schema)
             .await;
 
         (running, result)
     });
 
-    let client_handle = tokio::spawn(async move {
-        client.serve((client_read, client_write)).await
-    });
+    let client_handle =
+        tokio::spawn(async move { client.serve((client_read, client_write)).await });
 
-    let result = tokio::time::timeout(
-        tokio::time::Duration::from_secs(5),
-        async {
-            let (server_result, _) = tokio::join!(server_handle, client_handle);
-            server_result
-        }
-    ).await;
+    let result = tokio::time::timeout(tokio::time::Duration::from_secs(5), async {
+        let (server_result, _) = tokio::join!(server_handle, client_handle);
+        server_result
+    })
+    .await;
 
     match result {
         Ok(Ok((_, Ok(elicitation_result)))) => {
@@ -365,24 +365,22 @@ async fn test_elicitation_with_provenance() {
             .build()
             .unwrap();
 
-        let result = running.service()
+        let result = running
+            .service()
             .send_elicitation(&wrapped_message, schema)
             .await;
 
         (running, result)
     });
 
-    let client_handle = tokio::spawn(async move {
-        client.serve((client_read, client_write)).await
-    });
+    let client_handle =
+        tokio::spawn(async move { client.serve((client_read, client_write)).await });
 
-    let result = tokio::time::timeout(
-        tokio::time::Duration::from_secs(5),
-        async {
-            let (server_result, _) = tokio::join!(server_handle, client_handle);
-            server_result
-        }
-    ).await;
+    let result = tokio::time::timeout(tokio::time::Duration::from_secs(5), async {
+        let (server_result, _) = tokio::join!(server_handle, client_handle);
+        server_result
+    })
+    .await;
 
     match result {
         Ok(Ok((_, Ok(_)))) => {

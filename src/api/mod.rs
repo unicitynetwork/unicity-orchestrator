@@ -1,15 +1,15 @@
 // REST API endpoints for the orchestrator
 
 use axum::{
+    Router,
     extract::State,
     http::StatusCode,
     response::Json,
     routing::{get, post},
-    Router,
 };
 use serde_json::Value;
-use tokio::sync::Mutex;
 use std::sync::Arc;
+use tokio::sync::Mutex;
 use tower::ServiceBuilder;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
@@ -65,9 +65,7 @@ async fn query_tools(
 
     // Read-only operation: we only need an immutable borrow of the orchestrator,
     // but we go through the mutex so we share the same instance with mutating ops.
-    let orchestrator = state
-        .lock()
-        .await;
+    let orchestrator = state.lock().await;
 
     // Note: REST API currently doesn't support authentication, so we pass None
     // for user_context. To add auth, extract user from request headers here.
@@ -109,13 +107,9 @@ async fn query_tools(
 //     })))
 // }
 
-async fn discover_tools(
-    State(state): State<AppState>,
-) -> Result<Json<Value>, StatusCode> {
+async fn discover_tools(State(state): State<AppState>) -> Result<Json<Value>, StatusCode> {
     // Mutating operation: (re)discover tools from all known MCP services.
-    let mut orchestrator = state
-        .lock()
-        .await;
+    let mut orchestrator = state.lock().await;
 
     let (services, tools) = orchestrator
         .discover_tools()
@@ -133,9 +127,7 @@ async fn discover_tools(
 ///
 /// This is a read-only endpoint that returns information about all services
 /// that have been discovered and registered in the orchestrator.
-async fn list_services(
-    State(state): State<AppState>,
-) -> Result<Json<Value>, StatusCode> {
+async fn list_services(State(state): State<AppState>) -> Result<Json<Value>, StatusCode> {
     // Read-only operation: query services from the database
     let orchestrator = state.lock().await;
     let db = orchestrator.db();
