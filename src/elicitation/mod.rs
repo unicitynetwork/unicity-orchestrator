@@ -76,7 +76,7 @@ pub use url::UrlHandler;
 // Re-export rmcp elicitation types for external use
 pub use rmcp::model::{
     ElicitationAction, ElicitationSchema,
-    CreateElicitationRequestParam, CreateElicitationResult,
+    CreateElicitationRequestParams, CreateElicitationResult,
     StringFormat,
     PrimitiveSchema,
 };
@@ -462,9 +462,10 @@ impl ElicitationCoordinator {
             .ok_or_else(|| ElicitationError::Internal("No peer connected".to_string()))?;
 
         // Create the request parameters
-        let params = CreateElicitationRequestParam {
+        let params = CreateElicitationRequestParams {
             message: message.into(),
             requested_schema: schema,
+            meta: None,
         };
 
         // Send the elicitation request

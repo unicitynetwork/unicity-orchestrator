@@ -23,7 +23,7 @@ struct TestClient {
     /// Content to return (for Accept action)
     response_content: Option<serde_json::Value>,
     /// Track received elicitations for assertions
-    received_elicitations: Arc<RwLock<Vec<CreateElicitationRequestParam>>>,
+    received_elicitations: Arc<RwLock<Vec<CreateElicitationRequestParams>>>,
 }
 
 impl TestClient {
@@ -43,7 +43,7 @@ impl TestClient {
         Self::new(ElicitationAction::Decline, None)
     }
 
-    fn received_elicitations(&self) -> Arc<RwLock<Vec<CreateElicitationRequestParam>>> {
+    fn received_elicitations(&self) -> Arc<RwLock<Vec<CreateElicitationRequestParams>>> {
         self.received_elicitations.clone()
     }
 }
@@ -51,6 +51,7 @@ impl TestClient {
 impl ClientHandler for TestClient {
     fn get_info(&self) -> ClientInfo {
         ClientInfo {
+            meta: None,
             protocol_version: ProtocolVersion::V_2025_06_18,
             capabilities: ClientCapabilities::builder()
                 .enable_elicitation()
@@ -67,7 +68,7 @@ impl ClientHandler for TestClient {
 
     fn create_elicitation(
         &self,
-        request: CreateElicitationRequestParam,
+        request: CreateElicitationRequestParams,
         _context: RequestContext<RoleClient>,
     ) -> impl Future<Output = Result<CreateElicitationResult, McpError>> + Send + '_ {
         let action = self.response_action.clone();
@@ -123,9 +124,10 @@ impl TestServer {
         let peer_guard = self.peer.read().await;
         let peer = peer_guard.as_ref().ok_or("No peer connected")?;
 
-        let params = CreateElicitationRequestParam {
+        let params = CreateElicitationRequestParams {
             message: message.to_string(),
             requested_schema: schema,
+            meta: None,
         };
 
         peer.create_elicitation(params)
@@ -152,7 +154,7 @@ impl ServerHandler for TestServer {
 
     fn initialize(
         &self,
-        _request: InitializeRequestParam,
+        _request: InitializeRequestParams,
         context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<InitializeResult, McpError>> + Send + '_ {
         let peer_storage = self.peer.clone();
@@ -239,11 +241,11 @@ async fn test_elicitation_accept_flow() {
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
 
         let schema = ElicitationSchema::builder()
-            .required_enum("action", vec![
+            .required_enum_schema("action", EnumSchema::builder(vec![
                 "allow_once".to_string(),
                 "always_allow".to_string(),
                 "deny".to_string(),
-            ])
+            ]).build())
             .build()
             .unwrap();
 

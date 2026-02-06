@@ -209,7 +209,7 @@ impl ServerHandler for McpServer {
 
     fn initialize(
         &self,
-        request: InitializeRequestParam,
+        request: InitializeRequestParams,
         context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<InitializeResult, McpError>> + Send + '_ {
         // Update client capabilities in elicitation coordinator
@@ -364,7 +364,7 @@ impl ServerHandler for McpServer {
 
     fn list_tools(
         &self,
-        request: Option<PaginatedRequestParam>,
+        request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
         let cursor = request.as_ref().and_then(|r| r.cursor.as_ref().map(|c| c.as_str()));
@@ -377,7 +377,7 @@ impl ServerHandler for McpServer {
 
     fn call_tool(
         &self,
-        request: CallToolRequestParam,
+        request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<CallToolResult, McpError>> + Send + '_ {
         let tool_name = request.name.to_string();
@@ -407,7 +407,7 @@ impl ServerHandler for McpServer {
 
     fn complete(
         &self,
-        _request: CompleteRequestParam,
+        _request: CompleteRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<CompleteResult, McpError>> + Send + '_ {
         std::future::ready(Err(McpError::method_not_found::<CompleteRequestMethod>()))
@@ -415,7 +415,7 @@ impl ServerHandler for McpServer {
 
     fn set_level(
         &self,
-        _request: SetLevelRequestParam,
+        _request: SetLevelRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
         std::future::ready(Err(McpError::method_not_found::<SetLevelRequestMethod>()))
@@ -423,7 +423,7 @@ impl ServerHandler for McpServer {
 
     fn get_prompt(
         &self,
-        request: GetPromptRequestParam,
+        request: GetPromptRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<GetPromptResult, McpError>> + Send + '_ {
         use crate::prompts::PromptError;
@@ -459,7 +459,7 @@ impl ServerHandler for McpServer {
 
     fn list_prompts(
         &self,
-        request: Option<PaginatedRequestParam>,
+        request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ListPromptsResult, McpError>> + Send + '_ {
         let forwarder = self.orchestrator.prompt_forwarder().clone();
@@ -477,7 +477,7 @@ impl ServerHandler for McpServer {
 
     fn list_resources(
         &self,
-        request: Option<PaginatedRequestParam>,
+        request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ListResourcesResult, McpError>> + Send + '_ {
         let forwarder = self.orchestrator.resource_forwarder().clone();
@@ -495,7 +495,7 @@ impl ServerHandler for McpServer {
 
     fn list_resource_templates(
         &self,
-        request: Option<PaginatedRequestParam>,
+        request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ListResourceTemplatesResult, McpError>> + Send + '_ {
         let forwarder = self.orchestrator.resource_forwarder().clone();
@@ -513,7 +513,7 @@ impl ServerHandler for McpServer {
 
     fn read_resource(
         &self,
-        request: ReadResourceRequestParam,
+        request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ReadResourceResult, McpError>> + Send + '_ {
         let forwarder = self.orchestrator.resource_forwarder().clone();
@@ -525,7 +525,7 @@ impl ServerHandler for McpServer {
                 Err(ResourceError::NotFound(uri)) => {
                     // -32002: Resource not found (custom error code per MCP spec)
                     Err(McpError::new(
-                        rmcp::model::ErrorCode(-32002),
+                        ErrorCode(-32002),
                         format!("Resource not found: {}", uri),
                         None,
                     ))
@@ -544,7 +544,7 @@ impl ServerHandler for McpServer {
 
     fn subscribe(
         &self,
-        request: SubscribeRequestParam,
+        request: SubscribeRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
         let subscriptions = self.subscriptions.clone();
@@ -559,7 +559,7 @@ impl ServerHandler for McpServer {
 
     fn unsubscribe(
         &self,
-        request: UnsubscribeRequestParam,
+        request: UnsubscribeRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<(), McpError>> + Send + '_ {
         let subscriptions = self.subscriptions.clone();

@@ -9,7 +9,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use rmcp::model::{
     Prompt as McpPrompt, PromptArgument as McpPromptArgument,
-    GetPromptResult, GetPromptRequestParam, ListPromptsResult, JsonObject,
+    GetPromptResult, GetPromptRequestParams, ListPromptsResult, JsonObject,
     Icon,
 };
 use anyhow::Result;
@@ -438,11 +438,12 @@ impl PromptForwarder {
         // Call the service's prompts/get method via rmcp
         let result = service
             .client
-            .get_prompt(GetPromptRequestParam {
+            .get_prompt(GetPromptRequestParams {
                 name: prompt_name,
                 arguments: arguments.map(|a| {
                     a.into_iter().map(|(k, v)| (k.into(), v)).collect()
                 }),
+                meta: None,
             })
             .await
             .map_err(|e| PromptError::Internal(format!("Failed to get prompt: {}", e)))?;

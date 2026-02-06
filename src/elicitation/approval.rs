@@ -193,14 +193,15 @@ impl ApprovalManager {
         );
 
         // Create a type-safe schema using rmcp's ElicitationSchema builder
+        use rmcp::model::EnumSchema;
         let schema = ElicitationSchema::builder()
-            .required_enum(
+            .required_enum_schema(
                 "action",
-                vec![
+                EnumSchema::builder(vec![
                     "allow_once".to_string(),
                     "always_allow".to_string(),
                     "deny".to_string(),
-                ],
+                ]).build(),
             )
             .optional_bool("remember", false)
             .description("Tool execution approval")

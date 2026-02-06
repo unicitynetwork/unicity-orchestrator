@@ -5,7 +5,7 @@
 use std::pin::Pin;
 use std::future::Future;
 use std::sync::Arc;
-use rmcp::model::{CallToolResult, Content, JsonObject};
+use rmcp::model::{CallToolResult, Content, EnumSchema, JsonObject};
 use serde_json::json;
 use crate::auth::UserStore;
 use crate::db::ToolRecord;
@@ -183,13 +183,13 @@ impl ToolHandler for ExecuteToolHandler {
                     );
 
                     let schema = ElicitationSchema::builder()
-                        .required_enum(
+                        .required_enum_schema(
                             "action",
-                            vec![
+                            EnumSchema::builder(vec![
                                 "allow_once".to_string(),
                                 "unblock_service".to_string(),
                                 "keep_blocked".to_string(),
-                            ],
+                            ]).build(),
                         )
                         .description("Blocked service action")
                         .build()

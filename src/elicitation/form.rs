@@ -5,8 +5,24 @@
 //! `ElicitationSchema` for request construction and provides response validation.
 
 use crate::elicitation::{ElicitationError, ElicitationResult, ElicitationAction, ElicitationSchema, CreateElicitationResult, StringFormat};
+use rmcp::model::{EnumSchema, SingleSelectEnumSchema, MultiSelectEnumSchema};
 use serde_json::Value;
 use url::Url;
+
+/// Extract valid enum values from an EnumSchema (handles all variants).
+fn get_enum_values(enum_schema: &EnumSchema) -> Vec<&str> {
+    match enum_schema {
+        EnumSchema::Single(single) => match single {
+            SingleSelectEnumSchema::Untitled(s) => s.enum_.iter().map(|v| v.as_str()).collect(),
+            SingleSelectEnumSchema::Titled(s) => s.one_of.iter().map(|c| c.const_.as_ref()).collect(),
+        },
+        EnumSchema::Multi(multi) => match multi {
+            MultiSelectEnumSchema::Untitled(s) => s.items.enum_.iter().map(|v| v.as_str()).collect(),
+            MultiSelectEnumSchema::Titled(s) => s.items.any_of.iter().map(|c| c.const_.as_ref()).collect(),
+        },
+        EnumSchema::Legacy(legacy) => legacy.enum_.iter().map(|v| v.as_str()).collect(),
+    }
+}
 
 /// Form mode elicitation handler.
 ///
@@ -156,7 +172,8 @@ impl FormHandler {
                 let s = value.as_str()
                     .ok_or_else(|| ElicitationError::InvalidSchema(format!("Property '{}' must be a string", name)))?;
 
-                if !enum_schema.enum_values.contains(&s.to_string()) {
+                let valid_values = get_enum_values(enum_schema);
+                if !valid_values.contains(&s) {
                     return Err(ElicitationError::InvalidSchema(
                         format!("Property '{}' has invalid enum value: {}", name, s)
                     ));
@@ -325,9 +342,10 @@ mod tests {
 
     #[test]
     fn test_validate_enum_values() {
+        use rmcp::model::EnumSchema as RmcpEnumSchema;
         let handler = FormHandler::new();
         let schema = ElicitationSchema::builder()
-            .required_enum("color", vec!["red".to_string(), "green".to_string(), "blue".to_string()])
+            .required_enum_schema("color", RmcpEnumSchema::builder(vec!["red".to_string(), "green".to_string(), "blue".to_string()]).build())
             .build()
             .unwrap();
 

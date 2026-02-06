@@ -9,7 +9,7 @@ use rmcp::{
     ServiceExt,
     transport::{TokioChildProcess, ConfigureCommandExt},
 };
-use rmcp::model::{CallToolRequestParam, Content, JsonObject};
+use rmcp::model::{CallToolRequestParams, Content, JsonObject};
 use rmcp::transport::StreamableHttpClientTransport;
 use tokio::process::Command;
 use tracing::{info, warn};
@@ -123,9 +123,11 @@ pub async fn call_tool(
     tool_name: &str,
     args: JsonObject,
 ) -> Result<Vec<Content>> {
-    let request = CallToolRequestParam {
+    let request = CallToolRequestParams {
         name: Cow::from(tool_name.to_string()),
         arguments: Some(args),
+        meta: None,
+        task: None,
     };
 
     let resp = running.client.call_tool(request).await?;

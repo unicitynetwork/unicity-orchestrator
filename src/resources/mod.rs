@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use rmcp::model::{
-    RawResource, ReadResourceRequestParam,
+    RawResource, ReadResourceRequestParams,
     ListResourcesResult, ReadResourceResult,
     ListResourceTemplatesResult, RawResourceTemplate,
     AnnotateAble, Annotations, Icon,
@@ -339,8 +339,9 @@ impl ResourceForwarder {
             .ok_or_else(|| ResourceError::Internal(format!("Service not found: {}", service_id)))?;
 
         // Read the actual resource contents
-        let request = ReadResourceRequestParam {
+        let request = ReadResourceRequestParams {
             uri: uri.clone(),
+            meta: None,
         };
 
         service
@@ -401,6 +402,7 @@ impl ResourceForwarder {
                     title: t.title,
                     description: Some(description_with_provenance),
                     mime_type: t.mime_type,
+                    icons: None,
                 }.optional_annotate(t.annotations)
             })
             .collect();
