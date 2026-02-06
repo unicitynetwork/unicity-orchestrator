@@ -151,7 +151,7 @@ jobs:
 
   # ── Stable release (v* tags only) ───────────────────────────────
   release-stable:
-    if: startsWith(github.ref, 'refs/tags/')
+    if: always() && startsWith(github.ref, 'refs/tags/') && needs.build.result == 'success' && needs.docker.result == 'success'
     needs: [build, docker]
     runs-on: ubuntu-latest
     steps:
@@ -171,7 +171,7 @@ jobs:
 
   # ── Claude: rewrite stable release notes ────────────────────────
   release-notes:
-    if: startsWith(github.ref, 'refs/tags/')
+    if: always() && startsWith(github.ref, 'refs/tags/') && needs.release-stable.result == 'success'
     needs: [release-stable]
     runs-on: ubuntu-latest
     steps:
@@ -206,7 +206,7 @@ jobs:
 
   # ── Nightly release (scheduled / manual) ─────────────────────────
   release-nightly:
-    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    if: always() && !startsWith(github.ref, 'refs/tags/') && needs.build.result == 'success' && needs.docker.result == 'success'
     needs: [build, docker]
     runs-on: ubuntu-latest
     steps:
