@@ -9,8 +9,8 @@ Unicity Orchestrator is a sophisticated system that manages and discovers MCP to
 - **Knowledge Graph**: Typed relationships between tools, services, and data types
 - **Vector Embeddings**: Semantic similarity search for tool discovery
 - **Symbolic Reasoning**: Rule-based inference for intelligent tool selection
-- **Registry Integration**: Support for multiple MCP manifest registries
-- **Async Execution**: Parallel tool execution with dependency management
+- **Registry Integration**: Support for multiple MCP manifest registries *(in development)*
+- **Chain Execution**: Multi-step tool execution with dependency management *(in development — rmcp 0.14+)*
 
 ### LLM Interaction Model
 
@@ -33,14 +33,14 @@ This design ensures fast, predictable, and cost-efficient orchestration while ke
 ## Features
 
 ### Core Capabilities
-- **Multi-Registry Support**: GitHub, npm, and custom MCP registries
+- **Multi-Registry Support**: GitHub, npm, and custom MCP registries *(in development)*
 - **Tool Discovery**: Automatic discovery and indexing of MCP services
 - **Prompt Forwarding**: Aggregate prompts from all MCP services with intelligent conflict resolution
 - **Resource Forwarding**: Aggregate resources from all MCP services with automatic discovery
 - **Semantic Search**: Find tools by meaning, not just keywords
 - **Type-Safe Graph**: Enforced compatibility between tool inputs/outputs
 - **Symbolic Rules**: Define custom reasoning rules for tool selection
-- **Async Planning**: Plan and execute complex tool workflows
+- **Planning**: Plan complex tool workflows; the LLM drives execution of each step
 
 ### Knowledge Graph Features
 - **Typed Edges**: DataFlow, SemanticSimilarity, Sequential, etc.
@@ -70,9 +70,9 @@ The orchestrator aggregates resources from all configured MCP services and prese
 - **Resource Templates**: Support for parameterized resource templates (e.g., `git://{repo}/file/{path}`)
 
 ### API & CLI
-- **REST API**: HTTP endpoints for all orchestration functions
+- **REST API**: HTTP endpoints for tool queries and management
 - **CLI Tool**: Command-line interface for management and queries
-- **Real-time Updates**: Async updates to tool status and availability
+- **MCP Protocol**: Full MCP server via HTTP or stdio transport
 
 ## Quick Start
 
@@ -84,7 +84,7 @@ Unicity Orchestrator can be run fully containerized together with SurrealDB.
 
 The repository includes a `docker-compose.yml` file that launches the orchestrator in development mode:
 
-- **In‑Memory Mode (default)** — If no `SURREALDB_URL` is provided, the orchestrator automatically uses an in‑memory SurrealDB instance.
+- **In-Memory Mode (default)** — If no `SURREALDB_URL` is provided, the orchestrator automatically uses an in-memory SurrealDB instance.
 - **External SurrealDB (optional)** — To connect to a real SurrealDB deployment, set `SURREALDB_URL` and related env variables.
 
 ```yaml
@@ -94,7 +94,7 @@ services:
   orchestrator:
     build: .
     environment:
-      # Optional: If omitted, orchestrator runs with in‑memory DB for development
+      # Optional: If omitted, orchestrator runs with in-memory DB for development
       - SURREALDB_NAMESPACE=unicity
       - SURREALDB_DATABASE=orchestrator
       - SURREALDB_USERNAME=${SURREALDB_USERNAME:-root}
@@ -107,11 +107,13 @@ services:
 
 Start the system with:
 
-```
+```bash
 docker compose up --build
+```
 
-By default this runs with an in‑memory database. To point the orchestrator at a SurrealDB instance, set `SURREALDB_URL`:
+By default this runs with an in-memory database. To point the orchestrator at a SurrealDB instance, set `SURREALDB_URL`:
 
+```bash
 SURREALDB_URL=ws://localhost:8000/rpc docker compose up
 ```
 
@@ -144,7 +146,7 @@ docker run --rm \
 
 By default the container starts through an entrypoint that:
 
-- Uses **in‑memory SurrealDB** if `SURREALDB_URL` is not set.
+- Uses **in-memory SurrealDB** if `SURREALDB_URL` is not set.
 - Validates required database variables when `SURREALDB_URL` *is* set.
 
 ## Server Modes
@@ -152,31 +154,30 @@ By default the container starts through an entrypoint that:
 Unicity Orchestrator provides multiple server interfaces, each designed for different use cases:
 
 ### Public REST API
-Runs on a public-facing port (default: `0.0.0.0:8080`) and exposes only **read‑only** endpoints:
+Runs on a public-facing port (default: `0.0.0.0:8080`) and exposes only **read-only** endpoints:
 
 - `GET /health`
-- `POST /query` — semantic tool retrieval with user‑supplied context
+- `POST /query` — semantic tool retrieval with user-supplied context
 
-This API is safe to expose externally and is intended for user‑facing applications.
+This API is safe to expose externally and is intended for user-facing applications.
 
 ### Admin REST API
 Runs on a restricted/admin port (default: `127.0.0.1:8081`) and exposes **mutating** endpoints:
 
-- `POST /sync` — sync all MCP registries
 - `POST /discover` — rediscover & index tools from configured MCP services
 
-These endpoints modify orchestrator state and should **not** be exposed publicly.  
-Use firewall rules, Docker port‑mapping, or private network bindings to restrict access.
+These endpoints modify orchestrator state and should **not** be exposed publicly.
+Use firewall rules, Docker port-mapping, or private network bindings to restrict access.
 
 ### MCP HTTP Server
-The orchestrator also runs a full **MCP‑compatible server** on its own port (default: `3942`).  
+The orchestrator also runs a full **MCP-compatible server** on its own port (default: `3942`).
 This endpoint exposes the Model Context Protocol for agentic LLMs and MCP clients:
 
 ```
 http://localhost:3942/mcp
 ```
 
-This server is the primary interface for LLM‑based workflows and tool execution.
+This server is the primary interface for LLM-based workflows and tool execution.
 
 ### MCP Stdio Server
 For local development or integration with tools that expect an `stdio` MCP transport:
@@ -201,14 +202,14 @@ This mode is typically used with local MCP client tooling rather than production
 
 ## End-to-End Example
 
-This example demonstrates the full lifecycle of task orchestration — from a natural-language request to tool discovery, semantic matching, planning, and execution. It shows how Unicity Orchestrator handles tasks **without requiring the LLM to know any tools**.
+This example demonstrates the current lifecycle of tool orchestration — from a natural-language request to tool discovery, semantic matching, symbolic reasoning, and execution.
 
 ### 1. User / LLM Request
-The LLM (or user) sends an orchestration request to the `/query` endpoint:
+The LLM (or user) sends a query via the REST API or MCP protocol:
 
 ```json
 {
-  "query": "Summarize open GitHub issues from this repository and group them by severity.",
+  "query": "List open GitHub issues from this repository and group them by severity.",
   "context": {
     "repo_url": "https://github.com/example/project"
   }
@@ -216,63 +217,64 @@ The LLM (or user) sends an orchestration request to the `/query` endpoint:
 ```
 
 ### 2. Semantic Retrieval
-Unicity generates an embedding for the query and performs a vector search to find relevant tools:
+The orchestrator generates an embedding for the query and performs a cosine similarity search (top 32 results, 0.25 threshold). Candidate tools are ranked:
 
-- `github.list_issues`
-- `github.get_repo`
-- `json.structure_data`
-- `text.summarize`
+- `github.list_issues` — 0.91
+- `github.get_repo` — 0.78
+- `json.structure_data` — 0.72
+- `text.summarize` — 0.68
 
-These are ranked by semantic similarity; irrelevant tools are discarded.
+Tools below the threshold are discarded.
 
-### 3. Type-Aware Graph Filtering
-The orchestrator inspects each candidate tool:
+### 3. Symbolic Reasoning
+The symbolic reasoning engine loads candidates into working memory and applies forward/backward chaining over rules to adjust confidence scores and rank selections.
 
-- It loads the normalized `input_ty` / `output_ty` from the database.
-- It identifies type-compatible sequences:
-  - `github.list_issues` → produces `Issue[]`
-  - `json.structure_data` → accepts `Issue[]` and produces structured JSON
-  - `text.summarize` → accepts text or JSON
+The orchestrator returns ranked tool selections to the caller:
 
-It eliminates incompatible paths and keeps only the valid dataflows.
+```json
+[
+  {
+    "tool_name": "github.list_issues",
+    "service_name": "github-mcp",
+    "confidence": 0.91,
+    "reasoning": "High semantic similarity to query; tool lists GitHub issues."
+  }
+]
+```
 
-### 4. Symbolic Reasoning
-Symbolic rules reinforce expected tool chains:
-
-- "Listing issues" is commonly followed by "filtering" or "processing" tools.
-- Rules may recommend grouping, summarizing, or transforming steps.
-
-The planner generates the final sequence:
-
-1. `github.list_issues`
-2. `json.structure_data`
-3. `text.summarize`
-
-### 5. Execution
-The orchestrator executes each step through its rmcp client:
-
-- Calls GitHub MCP service → retrieves raw issues
-- Calls JSON transformer → groups by severity
-- Calls summarizer → produces a clean summary
-
-All arguments are derived from context + prior tool outputs.
-
-### 6. Final Response
-The orchestrator returns the final structured output:
+### 4. Execution
+The LLM (or calling client) selects a tool and asks the orchestrator to execute it. The orchestrator routes the call to the correct child MCP service via its rmcp client:
 
 ```json
 {
-  "summary": "12 open issues found. Critical: 2, High: 4, Medium: 3, Low: 3.",
-  "grouped_issues": {
-    "critical": [...],
-    "high": [...],
-    "medium": [...],
-    "low": [...]
+  "tool_name": "github.list_issues",
+  "service_name": "github-mcp",
+  "arguments": {
+    "repo": "example/project",
+    "state": "open"
   }
 }
 ```
 
-The LLM can present or further refine the result, but the entire orchestration flow — discovery, reasoning, planning, and execution — is automated.
+Execution is currently **single-tool per call**. The LLM is responsible for sequencing multiple tool calls — inspecting each result, deciding the next step, and passing arguments between tools.
+
+> **Note:** Automatic multi-step chain execution (where the orchestrator executes a planned sequence of tools and pipes outputs between them) is a planned feature being developed alongside rmcp 0.14+. Today, the `plan_tools` endpoint can suggest a multi-step plan, but execution of each step is driven by the caller.
+
+### 5. Final Response
+The executed tool returns its result through the orchestrator:
+
+```json
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "[{\"number\": 42, \"title\": \"Critical bug in auth\", \"labels\": [\"critical\"]}, ...]"
+    }
+  ]
+}
+```
+
+The LLM can then call additional tools (e.g., a summarizer or formatter) using the same select-then-execute flow, or process the result directly.
 
 ### Installation
 
@@ -289,7 +291,7 @@ cargo build --release
 
 ### MCP Configuration File (mcp.json)
 
-The orchestrator requires an `mcp.json` file that lists external MCP services to load.  
+The orchestrator requires an `mcp.json` file that lists external MCP services to load.
 When running inside Docker or directly from the binary, the orchestrator will attempt to locate this file in the working directory (`./mcp.json`).
 
 **Automatic Behavior:**
@@ -301,7 +303,7 @@ When running inside Docker or directly from the binary, the orchestrator will at
 { "mcpServers": {} }
 ```
 
-This ensures the system always starts cleanly even without external MCP services configured.  
+This ensures the system always starts cleanly even without external MCP services configured.
 You may add services to this file at any time and restart the orchestrator.
 
 Create a `mcp.json` file to configure your MCP services:
@@ -329,19 +331,16 @@ Create a `mcp.json` file to configure your MCP services:
 
 ```bash
 # Initialize the database
-cargo run init
+cargo run -- init --db-url memory
 
 # Discover tools from configured services
-cargo run discover-tools
+cargo run -- discover-tools
 
 # Start the API server
-cargo run server --port 8080
+cargo run -- server --port 8080
 
 # Query for tools
-cargo run query "read a file from filesystem"
-
-# Sync with registries
-cargo run sync-registries
+cargo run -- query "read a file from filesystem"
 ```
 
 ## Architecture
@@ -357,9 +356,9 @@ cargo run sync-registries
 - **Traversal**: BFS/DFS with type checking and compatibility rules
 
 ### Embedding Engine
-- **Models**: Support for multiple embedding models
-- **Caching**: In-memory caching for frequently accessed embeddings
-- **Similarity**: Cosine similarity with configurable thresholds
+- **Model**: Qwen3 0.6B (1024-dim, local inference via embed_anything)
+- **Caching**: In-memory caching with content-hash deduplication
+- **Similarity**: Cosine similarity with 0.25 threshold
 
 ### Symbolic Reasoner
 - **Rules**: Forward and backward chaining inference
@@ -373,6 +372,11 @@ cargo run sync-registries
 GET /health
 ```
 
+Returns:
+```json
+{"status": "healthy", "timestamp": "2025-01-01T00:00:00Z"}
+```
+
 ### Query Tools
 ```
 POST /query
@@ -382,11 +386,6 @@ POST /query
     "file_path": "/path/to/file.json"
   }
 }
-```
-
-### Sync Registries
-```
-POST /sync
 ```
 
 ### Discover Tools
@@ -405,40 +404,11 @@ SURREALDB_USERNAME=root
 SURREALDB_PASSWORD=password
 ```
 
-### Registries
-```rust
-use unicity_orchestrator::mcp::registry::RegistryConfig;
-
-let github_registry = RegistryConfig {
-    id: "github".to_string(),
-    name: "GitHub MCP Registry".to_string(),
-    url: "https://raw.githubusercontent.com/mcp/registry/main".to_string(),
-    description: Some("Official MCP registry on GitHub".to_string()),
-    auth_token: None,
-    sync_interval: Duration::from_secs(3600),
-    is_active: true,
-};
-```
-
 ## Development
 
 ### Project Structure
 
 TODO
-
-### Adding New Registry Providers
-
-Implement the `RegistryProvider` trait:
-
-```rust
-#[async_trait]
-impl RegistryProvider for MyRegistryProvider {
-    async fn list_manifests(&self) -> Result<Vec<RegistryManifest>>;
-    async fn get_manifest(&self, name: &str, version: &str) -> Result<Option<RegistryManifest>>;
-    async fn download_manifest(&self, manifest: &RegistryManifest) -> Result<serde_json::Value>;
-    async fn verify_manifest(&self, manifest: &RegistryManifest, content: &[u8]) -> Result<bool>;
-}
-```
 
 ### Adding Symbolic Rules
 

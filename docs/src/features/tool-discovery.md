@@ -61,6 +61,8 @@ Re-discovery restarts child services, re-indexes tools, and rebuilds the graph.
 
 ## Registry Integration
 
+> **Note:** External registry integration is planned but not yet implemented.
+
 The orchestrator supports external registries for discovering additional MCP services:
 
 | Registry Type | Description |

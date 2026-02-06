@@ -13,13 +13,15 @@ During warmup, the orchestrator iterates through all running child services and 
 When multiple services define prompts with the same name, the orchestrator handles conflicts automatically:
 
 1. **First service wins** — The first-discovered prompt keeps the original name
-2. **Aliases created** — Subsequent conflicts create namespaced aliases in the format `service:prompt_name`
+2. **Aliases created** — Subsequent conflicts create namespaced aliases in the format `service-prompt_name` (using hyphens after sanitization)
 3. **Case-insensitive** — Conflict detection is case-insensitive to prevent subtle collisions
 
 For example, if both `github` and `gitlab` services define a `commit` prompt:
 - `commit` → resolves to the first-discovered version
-- `github:commit` → explicitly targets the GitHub version
-- `gitlab:commit` → explicitly targets the GitLab version
+- `github-commit` → registered alias for the GitHub version
+- `gitlab-commit` → registered alias for the GitLab version
+
+Note: While the registered alias names use hyphens (`service-prompt_name`), the colon format (`service:prompt_name`) works during resolution as a lookup pattern.
 
 ### Resolution Order
 

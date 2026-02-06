@@ -13,7 +13,7 @@ pub struct GraphNode {
     pub id: RecordId,
     pub node_type: NodeType,
     pub data: serde_json::Value,
-    pub embeddings: Vec<f32>,
+    pub embeddings: Option<Vec<EmbeddingInfo>>,
     pub metadata: HashMap<String, serde_json::Value>,
 }
 ```
@@ -34,10 +34,11 @@ Edges encode typed relationships between nodes:
 
 ```rust
 pub struct GraphEdge {
+    pub id: RecordId,
     pub from: RecordId,
     pub to: RecordId,
     pub edge_type: EdgeType,
-    pub weight: f64,
+    pub weight: f32,
     pub metadata: HashMap<String, serde_json::Value>,
 }
 ```

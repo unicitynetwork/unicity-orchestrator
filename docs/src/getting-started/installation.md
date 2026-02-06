@@ -63,7 +63,7 @@ export SURREALDB_PASSWORD=root
 unicity-orchestrator init --db-url memory
 
 # Check that tools can be discovered
-unicity-orchestrator discover-tools --db-url memory
+unicity-orchestrator discover-tools
 ```
 
 If no `mcp.json` is present, the orchestrator will create a minimal default config and start cleanly.

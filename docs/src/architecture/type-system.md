@@ -28,7 +28,7 @@ pub struct TypedSchema {
     pub properties: Option<HashMap<String, TypedSchema>>,
     pub items: Option<Box<TypedSchema>>,
     pub required: Option<Vec<String>>,
-    pub enum_values: Option<Vec<String>>,
+    pub enum_values: Option<Vec<serde_json::Value>>,
 }
 ```
 

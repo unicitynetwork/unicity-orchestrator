@@ -75,7 +75,7 @@ For remote MCP services, use the `url` field instead:
 | `headers` | object | HTTP headers for remote services |
 | `disabled` | bool | Disable this service without removing it |
 | `autoApprove` | string[] | Tools to auto-approve without elicitation |
-| `disabledTools` | string[] | Tools to exclude from this service |
+| `disabled_tools` | string[] | Tools to exclude from this service |
 
 ### Environment Variable Expansion
 

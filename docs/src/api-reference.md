@@ -11,7 +11,8 @@ Health check.
 **Response:**
 ```json
 {
-  "status": "ok"
+  "status": "healthy",
+  "timestamp": "2025-01-01T00:00:00Z"
 }
 ```
 
@@ -112,14 +113,16 @@ Generate a multi-step execution plan.
 {
   "steps": [
     {
-      "tool_id": "tool:abc123",
-      "tool_name": "github.list_issues",
-      "reasoning": "Fetch open issues from the repository"
+      "description": "Fetch open issues from the repository",
+      "serviceId": "service:xyz",
+      "toolName": "github.list_issues",
+      "inputs": []
     },
     {
-      "tool_id": "tool:def456",
-      "tool_name": "json.structure_data",
-      "reasoning": "Group issues by severity"
+      "description": "Group issues by severity",
+      "serviceId": "service:abc",
+      "toolName": "json.structure_data",
+      "inputs": ["output_from_step_1"]
     }
   ],
   "confidence": 0.85,
@@ -155,7 +158,7 @@ List all discovered tools with optional filtering.
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `service_filter` | string | No | — | Filter by service name |
-| `include_blocked` | boolean | No | `false` | Include blocked tools |
+| `include_blocked` | boolean | No | `true` | Include blocked tools |
 | `limit` | integer | No | `100` | Max results |
 | `offset` | integer | No | `0` | Pagination offset |
 

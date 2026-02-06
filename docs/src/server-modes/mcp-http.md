@@ -20,7 +20,7 @@ http://localhost:3942/mcp
 |------|---------|-------------|
 | `--bind` | `0.0.0.0:3942` | Address and port to bind |
 | `--db-url` | env or `memory` | Database connection URL |
-| `--allow-anonymous` | `false` | Allow unauthenticated access |
+| `--allow-anonymous` | `true` | Allow unauthenticated access |
 | `--api-key` | — | Require a static API key |
 | `--enable-db-api-keys` | `false` | Enable database-backed API keys |
 | `--jwks-url` | — | JWKS endpoint for JWT validation |

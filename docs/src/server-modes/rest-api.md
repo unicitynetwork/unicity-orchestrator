@@ -27,7 +27,8 @@ Health check endpoint.
 **Response:**
 ```json
 {
-  "status": "ok"
+  "status": "healthy",
+  "timestamp": "2025-01-01T00:00:00Z"
 }
 ```
 

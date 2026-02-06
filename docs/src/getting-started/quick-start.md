@@ -27,7 +27,7 @@ This configures a single filesystem MCP server. You can add more services later.
 cargo run -- init --db-url memory
 
 # Discover tools from configured MCP services
-cargo run -- discover-tools --db-url memory
+cargo run -- discover-tools
 ```
 
 During discovery, the orchestrator will:

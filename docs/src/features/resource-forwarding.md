@@ -37,6 +37,8 @@ git://{repo}/file/{path}
 
 ### Subscriptions
 
+> **Note:** Subscription support is planned but not yet implemented.
+
 Clients can subscribe to specific resources via `resources/subscribe` and unsubscribe with `resources/unsubscribe`. The server tracks active subscriptions per session.
 
 ## URI Security

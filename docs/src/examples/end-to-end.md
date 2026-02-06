@@ -1,27 +1,29 @@
 # End-to-End Walkthrough
 
-This example demonstrates the full lifecycle of task orchestration — from a natural-language request to tool discovery, semantic matching, planning, and execution.
+This example demonstrates the current lifecycle of tool orchestration — from a natural-language request to tool discovery, semantic matching, symbolic reasoning, and execution.
 
 ## Scenario
 
-An LLM needs to summarize open GitHub issues from a repository and group them by severity. The LLM does **not** need to know which tools exist — the orchestrator handles everything.
+An LLM needs to find tools that can list GitHub issues from a repository. The LLM does **not** need to know which tools exist — the orchestrator discovers and ranks them.
 
 ## Step 1: User / LLM Request
 
-The LLM sends a query:
+The LLM sends a query via the REST API or MCP protocol:
 
 ```json
 {
-  "query": "Summarize open GitHub issues from this repository and group them by severity.",
+  "query": "List open GitHub issues from this repository and group them by severity.",
   "context": {
     "repo_url": "https://github.com/example/project"
   }
 }
 ```
 
+The `query` field is required. The `context` field is optional and provides additional information that the orchestrator can use during tool selection.
+
 ## Step 2: Semantic Retrieval
 
-The orchestrator generates an embedding for the query and performs a vector search. Candidate tools are ranked by cosine similarity:
+The orchestrator generates an embedding for the query using `embed_anything` and performs a cosine similarity search against all indexed tool embeddings in SurrealDB. Up to 32 candidate tools are retrieved, filtered by a **0.25 similarity threshold**:
 
 | Tool | Similarity |
 |------|-----------|
@@ -30,66 +32,78 @@ The orchestrator generates an embedding for the query and performs a vector sear
 | `json.structure_data` | 0.72 |
 | `text.summarize` | 0.68 |
 
-Irrelevant tools are discarded (below the 0.25 threshold).
+Tools below the 0.25 threshold are discarded.
 
-## Step 3: Type-Aware Graph Filtering
+## Step 3: Symbolic Reasoning
 
-The orchestrator inspects each candidate tool's `input_ty` and `output_ty`:
+The symbolic reasoning engine loads the candidate tools and query context into working memory as facts (e.g., `tool_exists`, `tool_input_type`, `tool_output_type`). It then applies forward and backward chaining over loaded rules to adjust confidence scores and rank the selections.
 
-- `github.list_issues` → produces `Issue[]`
-- `json.structure_data` → accepts `Issue[]`, produces structured JSON
-- `text.summarize` → accepts text or JSON
+For example, a rule might boost a tool's score if its description matches the query intent, or if its type signature is compatible with other selected tools.
 
-Incompatible paths are eliminated. The valid data flow chain emerges:
+The reasoner outputs a ranked list of `ToolSelection` results, each with a tool name, service, confidence score, and a reasoning trace explaining why it was selected.
 
-```text
-github.list_issues → json.structure_data → text.summarize
+## Step 4: Tool Selection Response
+
+The orchestrator returns ranked tool selections to the caller:
+
+```json
+[
+  {
+    "tool_name": "github.list_issues",
+    "service_name": "github-mcp",
+    "confidence": 0.91,
+    "reasoning": "High semantic similarity to query; tool lists GitHub issues."
+  },
+  {
+    "tool_name": "json.structure_data",
+    "service_name": "json-tools-mcp",
+    "confidence": 0.72,
+    "reasoning": "Can structure and group JSON data."
+  }
+]
 ```
-
-## Step 4: Symbolic Reasoning
-
-Symbolic rules reinforce the chain:
-
-- "Listing issues" is commonly followed by "filtering" or "processing" tools
-- Rules recommend grouping, summarizing, or transforming steps
-
-The planner generates the final sequence:
-
-1. `github.list_issues`
-2. `json.structure_data`
-3. `text.summarize`
 
 ## Step 5: Execution
 
-The orchestrator executes each step through its rmcp client:
-
-1. Calls GitHub MCP service → retrieves raw issues
-2. Calls JSON transformer → groups by severity
-3. Calls summarizer → produces a clean summary
-
-Arguments are derived from the initial context and prior tool outputs.
-
-## Step 6: Final Response
+The LLM (or calling client) selects a tool from the results and asks the orchestrator to execute it. The orchestrator routes the call to the correct child MCP service via its rmcp client:
 
 ```json
 {
-  "summary": "12 open issues found. Critical: 2, High: 4, Medium: 3, Low: 3.",
-  "grouped_issues": {
-    "critical": ["..."],
-    "high": ["..."],
-    "medium": ["..."],
-    "low": ["..."]
+  "tool_name": "github.list_issues",
+  "service_name": "github-mcp",
+  "arguments": {
+    "repo": "example/project",
+    "state": "open"
   }
 }
 ```
 
-The LLM can present or refine the result, but the entire orchestration flow — discovery, reasoning, planning, and execution — was automated.
+Execution is currently **single-tool per call**. The LLM is responsible for sequencing multiple tool calls — inspecting each result, deciding the next step, and passing arguments between tools.
 
-## What the LLM Did vs. What the Orchestrator Did
+> **Note:** Automatic multi-step chain execution (where the orchestrator executes a planned sequence of tools and pipes outputs between them) is a planned feature being developed alongside rmcp 0.14+. Today, the `plan_tools` endpoint can suggest a multi-step plan, but execution of each step is driven by the caller.
+
+## Step 6: Final Response
+
+The executed tool returns its result through the orchestrator:
+
+```json
+{
+  "content": [
+    {
+      "type": "text",
+      "text": "[{\"number\": 42, \"title\": \"Critical bug in auth\", \"labels\": [\"critical\"]}, ...]"
+    }
+  ]
+}
+```
+
+The LLM can then call additional tools (e.g., a summarizer or formatter) using the same select-then-execute flow, or process the result directly.
+
+## What the LLM Does vs. What the Orchestrator Does
 
 | Actor | Actions |
 |-------|---------|
-| **LLM** | Described the task in natural language, presented the final result |
-| **Orchestrator** | Embedded the query, searched tools, checked type compatibility, applied symbolic rules, planned the chain, executed each step |
+| **LLM** | Describes the task in natural language, chooses which selected tools to execute, sequences multi-step workflows, presents results |
+| **Orchestrator** | Embeds the query, searches tools by similarity, applies symbolic reasoning, ranks candidates, executes individual tool calls via child MCP services |
 
-The LLM never named a tool, constructed a schema, or managed execution order. This is the core design principle: **minimal LLM involvement, maximum automated reasoning**.
+The LLM never needs to know which MCP services are available or how to reach them. The orchestrator handles discovery, ranking, and routing. The LLM focuses on **what** to do; the orchestrator handles **which tool** and **where**.

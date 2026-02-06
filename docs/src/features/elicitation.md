@@ -27,7 +27,7 @@ When `unicity.execute_tool` is called for a tool on a blocked service, the appro
 2. **Creates elicitation** — If permission is required, builds an approval form with three options:
    - `allow_once` — Permit this single execution
    - `always_allow` — Unblock the service permanently
-   - `deny` / `keep_blocked` — Deny execution
+   - `deny` — Deny execution
 3. **Processes response** — Grants or denies permission based on the user's choice
 4. **Consumes one-time permissions** — `allow_once` permissions are consumed after use
 

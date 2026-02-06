@@ -47,13 +47,12 @@ Runs the full warmup pipeline: starts services, lists tools, generates embedding
 Query for tools using natural language.
 
 ```bash
-unicity-orchestrator query "read a file from the filesystem" --limit 5 --db-url memory
+unicity-orchestrator query "read a file from the filesystem" --db-url memory
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `<query>` | — | Natural-language query (positional argument) |
-| `--limit` | `10` | Maximum number of results |
 | `--db-url` | env or `memory` | Database URL |
 
 ---
@@ -63,13 +62,13 @@ unicity-orchestrator query "read a file from the filesystem" --limit 5 --db-url 
 Start the REST API server.
 
 ```bash
-unicity-orchestrator server --port 8080 --admin-port 8081 --db-url memory
+unicity-orchestrator server --port 8080 --admin-bind 127.0.0.1:8081 --db-url memory
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--port` | `8080` | Public API port |
-| `--admin-port` | `8081` | Admin API port |
+| `--admin-bind` | `127.0.0.1:8081` | Admin API bind address |
 | `--db-url` | env or `memory` | Database URL |
 
 ---
@@ -86,7 +85,7 @@ unicity-orchestrator mcp-http --bind 0.0.0.0:3942 --db-url memory
 |------|---------|-------------|
 | `--bind` | `0.0.0.0:3942` | Bind address |
 | `--db-url` | env or `memory` | Database URL |
-| `--allow-anonymous` | `false` | Allow unauthenticated access |
+| `--allow-anonymous` | `true` | Allow unauthenticated access |
 | `--api-key` | — | Static API key (also: `ORCHESTRATOR_API_KEY` env) |
 | `--enable-db-api-keys` | `false` | Enable database-backed API keys |
 | `--jwks-url` | — | JWKS endpoint URL |
@@ -120,6 +119,8 @@ unicity-orchestrator create-api-key --name "My App" --db-url ws://localhost:8000
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--name` | — | Human-readable key name |
+| `--expires-days` | — | Optional: Number of days until expiry |
+| `--scopes` | — | Optional: Comma-separated scopes |
 | `--db-url` | env or `memory` | Database URL |
 
 Prints the generated key to stdout. The key is shown only once.
@@ -136,6 +137,7 @@ unicity-orchestrator list-api-keys --db-url ws://localhost:8000/rpc
 
 | Flag | Default | Description |
 |------|---------|-------------|
+| `--active-only` | `false` | Only show active keys |
 | `--db-url` | env or `memory` | Database URL |
 
 ---
