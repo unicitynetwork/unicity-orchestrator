@@ -1,0 +1,240 @@
+name: Release
+
+on:
+  push:
+    tags: ["[0-9]*.[0-9]*.[0-9]*"]
+  schedule:
+    - cron: "0 0 * * *" # midnight UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ── Gate: ensure the code is healthy before building ─────────────
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy -- -D warnings
+
+      - name: Test
+        run: cargo test
+
+  # ── Skip nightly if nothing changed ──────────────────────────────
+  changes:
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    outputs:
+      has_changes: ${{ steps.check.outputs.has_changes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check for code changes in last 24h
+        id: check
+        run: |
+          # Only rebuild if source/build files changed — skip docs-only commits
+          if git diff --name-only HEAD@{24.hours.ago}..HEAD -- \
+            'src/**' 'Cargo.toml' 'Cargo.lock' 'Dockerfile' 'entrypoint.sh' \
+            | grep -q .; then
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ── Build: native builds on 3 platforms ──────────────────────────
+  build:
+    needs: [check, changes]
+    if: |
+      always()
+      && needs.check.result == 'success'
+      && (needs.changes.result == 'skipped' || needs.changes.outputs.has_changes == 'true')
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+          - target: x86_64-apple-darwin
+            runner: macos-13
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Package tarball
+        run: |
+          STAGING="unicity-orchestrator-${{ matrix.target }}"
+          mkdir "$STAGING"
+          cp target/${{ matrix.target }}/release/unicity-orchestrator "$STAGING/"
+          cp README.md "$STAGING/" 2>/dev/null || true
+          cp LICENSE "$STAGING/" 2>/dev/null || true
+          tar czf "${STAGING}.tar.gz" "$STAGING"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: unicity-orchestrator-${{ matrix.target }}
+          path: unicity-orchestrator-${{ matrix.target }}.tar.gz
+          if-no-files-found: error
+
+  # ── Docker: build & push to GHCR ────────────────────────────────
+  docker:
+    needs: [check, changes]
+    if: |
+      always()
+      && needs.check.result == 'success'
+      && (needs.changes.result == 'skipped' || needs.changes.outputs.has_changes == 'true')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}},enable=${{ startsWith(github.ref, 'refs/tags/') }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ startsWith(github.ref, 'refs/tags/') }}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/') }}
+            type=raw,value=nightly,enable=${{ !startsWith(github.ref, 'refs/tags/') }}
+            type=raw,value=nightly-{{date 'YYYY-MM-DD'}},enable=${{ !startsWith(github.ref, 'refs/tags/') }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+  # ── Stable release (v* tags only) ───────────────────────────────
+  release-stable:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [build, docker]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: artifacts/*.tar.gz
+
+  # ── Claude: rewrite stable release notes ────────────────────────
+  release-notes:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [release-stable]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate release notes with Claude
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            Generate polished release notes for tag ${{ github.ref_name }}.
+
+            Steps:
+            1. Find the previous tag with: git tag --sort=-version:refname | grep -v '${{ github.ref_name }}' | head -n1
+               If a previous tag exists, run `git log <prev_tag>..${{ github.ref_name }}` to get the commit history.
+               If there is no previous tag (first release), run `git log ${{ github.ref_name }}` to get all commits.
+            2. Read the CLAUDE.md and any relevant source changes to understand the project.
+            3. Write professional release notes in markdown with these sections:
+               - **Highlights** (1-3 sentence summary of the most important changes)
+               - **What's New** (new features)
+               - **Improvements** (enhancements to existing features)
+               - **Bug Fixes** (if any)
+               - **Breaking Changes** (if any)
+               Omit any section that has no entries.
+            4. Update the GitHub release using: gh release edit ${{ github.ref_name }} --notes-file -
+               Pipe the generated markdown into that command.
+          claude_args: "--max-turns 10"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Nightly release (scheduled / manual) ─────────────────────────
+  release-nightly:
+    if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+    needs: [build, docker]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set date
+        id: date
+        run: echo "today=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Delete previous nightly release
+        run: gh release delete nightly --yes --cleanup-tag 2>/dev/null || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create nightly release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          name: nightly-${{ steps.date.outputs.today }}
+          prerelease: true
+          body: |
+            Nightly build `${{ steps.date.outputs.today }}` from `master` at `${{ github.sha }}`.
+
+            **This is a pre-release.** For stable releases, see the latest [versioned release](../../releases/latest).
+          files: artifacts/*.tar.gz
